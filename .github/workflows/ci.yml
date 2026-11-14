@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://pingushka_ci:pingushka_ci@localhost:5432/pingushka_ci
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: pingushka_ci
+          POSTGRES_USER: pingushka_ci
+          POSTGRES_PASSWORD: pingushka_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pingushka_ci -d pingushka_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@clippy
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

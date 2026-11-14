@@ -1,0 +1,8 @@
+[package]
+name = "pingushka-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pingushka-domain = { path = "../domain" }

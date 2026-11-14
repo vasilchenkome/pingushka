@@ -1,0 +1,10 @@
+[package]
+name = "pingushka-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pingushka-application = { path = "../application" }
+pingushka-hub-http = { path = "../hub-http" }
+pingushka-storage-postgres = { path = "../storage-postgres" }

@@ -1,0 +1,8 @@
+[package]
+name = "pingushka-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pingushka-protocol = { path = "../protocol" }
