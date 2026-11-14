@@ -1,0 +1,402 @@
+use async_trait::async_trait;
+use pingushka_application::{
+    error::PortError,
+    ports::{
+        AgentRepository, CheckResultRepository, SessionRepository, TargetRepository, UserRepository,
+    },
+    queries::{CheckSummary, HistoryFilter, SummaryFilter},
+};
+use pingushka_domain::{
+    Timestamp,
+    agent::Agent,
+    check::CheckResult,
+    identity::{AgentId, TargetId, TokenDigest},
+    target::Target,
+    user::{Session, User, Username},
+};
+use sqlx::{Postgres, QueryBuilder, types::Json};
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::{
+    PgStore,
+    mapper::{
+        AgentRow, CheckResultRow, SessionRow, StoredTargetSpec, TargetRow, UserRow,
+        target_kind_from_spec,
+    },
+};
+
+fn map_database_error(error: sqlx::Error) -> PortError {
+    if let sqlx::Error::Database(database_error) = &error {
+        match database_error.code().as_deref() {
+            Some("23505") => return PortError::Conflict,
+            Some("23503") => return PortError::NotFound,
+            Some("23514") | Some("22P02") => return PortError::InvalidData,
+            _ => {}
+        }
+    }
+    PortError::Unavailable
+}
+
+fn row_to_domain<Source, Domain>(row: Source) -> Result<Domain, PortError>
+where
+    Source: TryInto<Domain, Error = PortError>,
+{
+    row.try_into()
+}
+
+#[async_trait]
+impl TargetRepository for PgStore {
+    async fn save(&self, target: &Target) -> Result<(), PortError> {
+        let spec = StoredTargetSpec::from_domain(target.spec());
+        let kind = target_kind_from_spec(target.spec());
+        let interval_secs =
+            i32::try_from(target.interval().get()).map_err(|_| PortError::InvalidData)?;
+        let timeout_ms =
+            i32::try_from(target.timeout().get()).map_err(|_| PortError::InvalidData)?;
+        sqlx::query(
+            "INSERT INTO targets (id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind, spec_json = EXCLUDED.spec_json, interval_secs = EXCLUDED.interval_secs, timeout_ms = EXCLUDED.timeout_ms, enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at",
+        )
+        .bind(target.id().as_uuid())
+        .bind(target.name().as_str())
+        .bind(kind)
+        .bind(Json(spec))
+        .bind(interval_secs)
+        .bind(timeout_ms)
+        .bind(target.is_enabled())
+        .bind(target.created_at())
+        .bind(target.updated_at())
+        .execute(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(())
+    }
+
+    async fn find(&self, id: TargetId) -> Result<Option<Target>, PortError> {
+        let row = sqlx::query_as::<_, TargetRow>(
+            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at FROM targets WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(row_to_domain).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<Target>, PortError> {
+        let rows = sqlx::query_as::<_, TargetRow>(
+            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at FROM targets ORDER BY created_at, id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        rows.into_iter().map(row_to_domain).collect()
+    }
+
+    async fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<Target>, PortError> {
+        let rows = sqlx::query_as::<_, TargetRow>(
+            "SELECT t.id, t.name, t.kind, t.spec_json, t.interval_secs, t.timeout_ms, t.enabled, t.created_at, t.updated_at FROM targets t JOIN target_agents ta ON ta.target_id = t.id WHERE ta.agent_id = $1 AND t.enabled = TRUE ORDER BY t.created_at, t.id",
+        )
+        .bind(agent_id.as_uuid())
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        rows.into_iter().map(row_to_domain).collect()
+    }
+
+    async fn assign_agents(
+        &self,
+        target_id: TargetId,
+        agent_ids: &[AgentId],
+    ) -> Result<(), PortError> {
+        let mut transaction = self.pool().begin().await.map_err(map_database_error)?;
+        let exists =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM targets WHERE id = $1)")
+                .bind(target_id.as_uuid())
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_database_error)?;
+        if !exists {
+            return Err(PortError::NotFound);
+        }
+        sqlx::query("DELETE FROM target_agents WHERE target_id = $1")
+            .bind(target_id.as_uuid())
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database_error)?;
+        let mut unique_agents = std::collections::HashSet::new();
+        let assignments = agent_ids
+            .iter()
+            .filter(|agent_id| unique_agents.insert(agent_id.as_uuid()))
+            .collect::<Vec<_>>();
+        if !assignments.is_empty() {
+            let now = OffsetDateTime::now_utc();
+            let mut query = QueryBuilder::<Postgres>::new(
+                "INSERT INTO target_agents (target_id, agent_id, assigned_at) ",
+            );
+            query.push_values(assignments, |mut values, agent_id| {
+                values
+                    .push_bind(target_id.as_uuid())
+                    .push_bind(agent_id.as_uuid())
+                    .push_bind(now);
+            });
+            query.push(" ON CONFLICT (target_id, agent_id) DO NOTHING");
+            query
+                .build()
+                .execute(&mut *transaction)
+                .await
+                .map_err(map_database_error)?;
+        }
+        transaction.commit().await.map_err(map_database_error)
+    }
+
+    async fn delete(&self, id: TargetId) -> Result<bool, PortError> {
+        let result = sqlx::query("DELETE FROM targets WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(self.pool())
+            .await
+            .map_err(map_database_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl AgentRepository for PgStore {
+    async fn save(&self, agent: &Agent) -> Result<(), PortError> {
+        let token_hash = agent
+            .token_digest()
+            .map(|digest| digest.as_bytes().to_vec());
+        sqlx::query(
+            "INSERT INTO agents (id, name, token_hash, created_at, last_seen_at, connected, version) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, token_hash = EXCLUDED.token_hash, last_seen_at = EXCLUDED.last_seen_at, connected = EXCLUDED.connected, version = EXCLUDED.version",
+        )
+        .bind(agent.id().as_uuid())
+        .bind(agent.name().as_str())
+        .bind(token_hash)
+        .bind(agent.created_at())
+        .bind(agent.last_seen_at())
+        .bind(agent.is_connected())
+        .bind(agent.version())
+        .execute(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(())
+    }
+
+    async fn find(&self, id: AgentId) -> Result<Option<Agent>, PortError> {
+        let row = sqlx::query_as::<_, AgentRow>(
+            "SELECT id, name, token_hash, created_at, last_seen_at, connected, version FROM agents WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(row_to_domain).transpose()
+    }
+
+    async fn find_by_token_digest(&self, digest: TokenDigest) -> Result<Option<Agent>, PortError> {
+        let row = sqlx::query_as::<_, AgentRow>(
+            "SELECT id, name, token_hash, created_at, last_seen_at, connected, version FROM agents WHERE token_hash = $1",
+        )
+        .bind(digest.as_bytes().to_vec())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(row_to_domain).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<Agent>, PortError> {
+        let rows = sqlx::query_as::<_, AgentRow>(
+            "SELECT id, name, token_hash, created_at, last_seen_at, connected, version FROM agents ORDER BY created_at, id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        rows.into_iter().map(row_to_domain).collect()
+    }
+
+    async fn delete(&self, id: AgentId) -> Result<bool, PortError> {
+        let result = sqlx::query("DELETE FROM agents WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(self.pool())
+            .await
+            .map_err(map_database_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl UserRepository for PgStore {
+    async fn save(&self, user: &User) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, password_hash = EXCLUDED.password_hash",
+        )
+        .bind(user.id().as_uuid())
+        .bind(user.username().as_str())
+        .bind(user.password_hash().as_encoded())
+        .bind(user.created_at())
+        .execute(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(())
+    }
+
+    async fn find_by_username(&self, username: &Username) -> Result<Option<User>, PortError> {
+        let row = sqlx::query_as::<_, UserRow>(
+            "SELECT id, username, password_hash, created_at FROM users WHERE username = $1",
+        )
+        .bind(username.as_str())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(row_to_domain).transpose()
+    }
+
+    async fn count(&self) -> Result<u64, PortError> {
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+            .fetch_one(self.pool())
+            .await
+            .map_err(map_database_error)?;
+        u64::try_from(count).map_err(|_| PortError::InvalidData)
+    }
+}
+
+#[async_trait]
+impl SessionRepository for PgStore {
+    async fn save(&self, session: &Session) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT (token_hash) DO UPDATE SET user_id = EXCLUDED.user_id, created_at = EXCLUDED.created_at, expires_at = EXCLUDED.expires_at",
+        )
+        .bind(session.token_digest().as_bytes().to_vec())
+        .bind(session.user_id().as_uuid())
+        .bind(session.created_at())
+        .bind(session.expires_at())
+        .execute(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(())
+    }
+
+    async fn find_active_by_digest(
+        &self,
+        digest: TokenDigest,
+        now: Timestamp,
+    ) -> Result<Option<Session>, PortError> {
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE token_hash = $1 AND expires_at > $2",
+        )
+        .bind(digest.as_bytes().to_vec())
+        .bind(now)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(row_to_domain).transpose()
+    }
+
+    async fn revoke(&self, digest: TokenDigest) -> Result<bool, PortError> {
+        let result = sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+            .bind(digest.as_bytes().to_vec())
+            .execute(self.pool())
+            .await
+            .map_err(map_database_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn prune_expired(&self, now: Timestamp, limit: u16) -> Result<u16, PortError> {
+        let rows = sqlx::query_scalar::<_, Vec<u8>>(
+            "WITH expired AS (SELECT token_hash FROM sessions WHERE expires_at <= $1 ORDER BY expires_at LIMIT $2) DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM expired) RETURNING token_hash",
+        )
+        .bind(now)
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        u16::try_from(rows.len()).map_err(|_| PortError::InvalidData)
+    }
+}
+
+#[async_trait]
+impl CheckResultRepository for PgStore {
+    async fn record_batch(&self, results: &[CheckResult]) -> Result<usize, PortError> {
+        if results.is_empty() {
+            return Ok(0);
+        }
+        if results.len() > 100
+            || results
+                .iter()
+                .any(|result| result.latency().get() > i32::MAX as u32)
+        {
+            return Err(PortError::InvalidData);
+        }
+        let mut transaction = self.pool().begin().await.map_err(map_database_error)?;
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO check_results (result_id, target_id, agent_id, checked_at, ok, latency_ms, status_code, check_mode, error_kind, error_message) ",
+        );
+        query.push_values(results, |mut values, result| {
+            values
+                .push_bind(result.id().as_uuid())
+                .push_bind(result.target_id().as_uuid())
+                .push_bind(result.agent_id().as_uuid())
+                .push_bind(result.checked_at())
+                .push_bind(result.is_successful())
+                .push_bind(result.latency().get() as i32)
+                .push_bind(result.status_code().map(|code| code.get() as i16))
+                .push_bind(result.mode().as_str())
+                .push_bind(result.failure().map(|failure| failure.kind().as_str()))
+                .push_bind(result.failure().map(|failure| failure.message()));
+        });
+        query.push(" ON CONFLICT (result_id) DO NOTHING");
+        let result = query
+            .build()
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database_error)?;
+        transaction.commit().await.map_err(map_database_error)?;
+        usize::try_from(result.rows_affected()).map_err(|_| PortError::InvalidData)
+    }
+
+    async fn history(&self, filter: HistoryFilter) -> Result<Vec<CheckResult>, PortError> {
+        let rows = sqlx::query_as::<_, CheckResultRow>(
+            "SELECT result_id, target_id, agent_id, checked_at, ok, latency_ms, status_code, check_mode, error_kind, error_message FROM check_results WHERE target_id = $1 AND checked_at >= $2 AND checked_at < $3 AND ($4::UUID IS NULL OR agent_id = $4) ORDER BY checked_at DESC, result_id DESC LIMIT $5",
+        )
+        .bind(filter.target_id().as_uuid())
+        .bind(filter.from())
+        .bind(filter.to())
+        .bind(filter.agent_id().map(AgentId::as_uuid))
+        .bind(i64::from(filter.limit()))
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        rows.into_iter().map(row_to_domain).collect()
+    }
+
+    async fn summarize(&self, filter: SummaryFilter) -> Result<CheckSummary, PortError> {
+        let (total, successful, average, p95) = sqlx::query_as::<_, (i64, i64, Option<f64>, Option<f64>)>(
+            "SELECT COUNT(*)::BIGINT, COUNT(*) FILTER (WHERE ok)::BIGINT, AVG(latency_ms)::DOUBLE PRECISION, percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::DOUBLE PRECISION FROM check_results WHERE checked_at >= $1 AND checked_at < $2 AND ($3::UUID IS NULL OR target_id = $3) AND ($4::UUID IS NULL OR agent_id = $4)",
+        )
+        .bind(filter.from())
+        .bind(filter.to())
+        .bind(filter.target_id().map(TargetId::as_uuid))
+        .bind(filter.agent_id().map(AgentId::as_uuid))
+        .fetch_one(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(CheckSummary::new(
+            u64::try_from(total).map_err(|_| PortError::InvalidData)?,
+            u64::try_from(successful).map_err(|_| PortError::InvalidData)?,
+            average,
+            p95,
+        ))
+    }
+
+    async fn prune_before(&self, before: Timestamp, limit: u16) -> Result<u16, PortError> {
+        let rows = sqlx::query_scalar::<_, Uuid>(
+            "WITH expired AS (SELECT result_id FROM check_results WHERE checked_at < $1 ORDER BY checked_at LIMIT $2) DELETE FROM check_results WHERE result_id IN (SELECT result_id FROM expired) RETURNING result_id",
+        )
+        .bind(before)
+        .bind(i64::from(limit))
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        u16::try_from(rows.len()).map_err(|_| PortError::InvalidData)
+    }
+}

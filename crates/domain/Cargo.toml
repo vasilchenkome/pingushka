@@ -3,3 +3,8 @@ name = "pingushka-domain"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+time.workspace = true
+url.workspace = true
+uuid.workspace = true

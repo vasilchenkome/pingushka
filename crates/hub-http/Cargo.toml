@@ -5,5 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+argon2.workspace = true
 pingushka-application = { path = "../application" }
+pingushka-domain = { path = "../domain" }
 pingushka-protocol = { path = "../protocol" }
+rand.workspace = true
+sha2.workspace = true
