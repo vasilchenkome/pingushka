@@ -4,7 +4,7 @@ Pingushka is an open-source distributed monitoring system built around a central
 
 The planned MVP includes HTTP(S), TCP-port and ICMP checks; a PostgreSQL-backed history; an authenticated web dashboard; one-time enrollment commands for individual agents; and a Docker Compose deployment with automatic HTTPS through Caddy.
 
-**Status: early development.** The workspace, domain model, PostgreSQL schema/repositories, batch persistence, and cryptographic adapters are in place. The Hub endpoints, operational agent, dashboard, installer and application Docker image are not yet implemented or released.
+**Status: early development.** The workspace, domain model, PostgreSQL schema/repositories, batch persistence, and cryptographic adapters are in place. The Hub now exposes its authenticated REST API (first-run setup, sessions, agents with one-time enrollment, targets, history and summary), the agent WebSocket ingest with acknowledgements, and the retention pruner. The operational agent, dashboard, installer and application Docker image are not yet implemented or released.
 
 ## Supported agent platforms
 

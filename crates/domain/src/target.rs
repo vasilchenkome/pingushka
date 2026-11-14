@@ -300,4 +300,22 @@ impl Target {
         self.enabled = enabled;
         self.updated_at = now;
     }
+
+    pub fn update(
+        &mut self,
+        config: TargetConfig,
+        enabled: bool,
+        now: OffsetDateTime,
+    ) -> Result<(), TargetError> {
+        if now < self.created_at {
+            return Err(TargetError::UpdatedBeforeCreated);
+        }
+        self.name = config.name;
+        self.spec = config.spec;
+        self.interval = config.interval;
+        self.timeout = config.timeout;
+        self.enabled = enabled;
+        self.updated_at = now;
+        Ok(())
+    }
 }

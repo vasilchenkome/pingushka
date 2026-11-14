@@ -5,15 +5,21 @@ use pingushka_domain::{
     Timestamp,
     agent::Agent,
     check::CheckResult,
-    identity::{AgentId, TargetId, TokenDigest},
+    enrollment::AgentEnrollment,
+    identity::{AgentId, TargetId, TokenDigest, UserId},
     target::Target,
     user::{PasswordHash, Session, User, Username},
 };
 
 use crate::{
     error::PortError,
-    queries::{CheckSummary, HistoryFilter, SummaryFilter},
+    queries::{CheckSummary, HistoryFilter, SummaryFilter, TargetWithAgents},
 };
+
+#[async_trait]
+pub trait HealthCheck: Send + Sync {
+    async fn check(&self) -> Result<(), PortError>;
+}
 
 #[async_trait]
 pub trait CheckResultRepository: Send + Sync {
@@ -30,6 +36,24 @@ pub trait AgentRepository: Send + Sync {
     async fn find_by_token_digest(&self, digest: TokenDigest) -> Result<Option<Agent>, PortError>;
     async fn list(&self) -> Result<Vec<Agent>, PortError>;
     async fn delete(&self, id: AgentId) -> Result<bool, PortError>;
+    async fn mark_connected(
+        &self,
+        id: AgentId,
+        version: &str,
+        now: Timestamp,
+    ) -> Result<(), PortError>;
+    async fn mark_disconnected(&self, id: AgentId) -> Result<(), PortError>;
+}
+
+#[async_trait]
+pub trait AgentEnrollmentRepository: Send + Sync {
+    async fn save(&self, enrollment: &AgentEnrollment) -> Result<(), PortError>;
+    async fn consume(
+        &self,
+        digest: TokenDigest,
+        now: Timestamp,
+    ) -> Result<Option<AgentId>, PortError>;
+    async fn prune_expired(&self, now: Timestamp, limit: u16) -> Result<u16, PortError>;
 }
 
 #[async_trait]
@@ -37,7 +61,9 @@ pub trait TargetRepository: Send + Sync {
     async fn save(&self, target: &Target) -> Result<(), PortError>;
     async fn find(&self, id: TargetId) -> Result<Option<Target>, PortError>;
     async fn list(&self) -> Result<Vec<Target>, PortError>;
+    async fn list_with_agents(&self) -> Result<Vec<TargetWithAgents>, PortError>;
     async fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<Target>, PortError>;
+    async fn agent_ids(&self, target_id: TargetId) -> Result<Vec<AgentId>, PortError>;
     async fn assign_agents(
         &self,
         target_id: TargetId,
@@ -49,6 +75,8 @@ pub trait TargetRepository: Send + Sync {
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn save(&self, user: &User) -> Result<(), PortError>;
+    async fn save_if_first(&self, user: &User) -> Result<bool, PortError>;
+    async fn find(&self, id: UserId) -> Result<Option<User>, PortError>;
     async fn find_by_username(&self, username: &Username) -> Result<Option<User>, PortError>;
     async fn count(&self) -> Result<u64, PortError>;
 }

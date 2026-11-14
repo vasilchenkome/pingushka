@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod check;
+pub mod enrollment;
 pub mod identity;
 pub mod target;
 pub mod user;

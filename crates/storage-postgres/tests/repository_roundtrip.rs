@@ -1,6 +1,7 @@
 use pingushka_application::{
     ports::{
-        AgentRepository, CheckResultRepository, SessionRepository, TargetRepository, UserRepository,
+        AgentEnrollmentRepository, AgentRepository, CheckResultRepository, SessionRepository,
+        TargetRepository, UserRepository,
     },
     queries::{HistoryFilter, SummaryFilter},
 };
@@ -10,6 +11,7 @@ use pingushka_domain::{
     check::{
         CheckFailure, CheckFailureKind, CheckMode, CheckOutcome, CheckResult, LatencyMs, StatusCode,
     },
+    enrollment::AgentEnrollment,
     identity::{AgentId, CheckResultId, TargetId, TokenDigest, UserId},
     target::{CheckIntervalSecs, HttpUrl, Target, TargetConfig, TargetName, TargetSpec, TimeoutMs},
     user::{PasswordHash, Session, User, Username},
@@ -209,5 +211,64 @@ async fn result_batches_are_idempotent_and_queries_return_aggregates(pool: PgPoo
     assert_eq!(
         store.prune_before(time(1_700_000_002), 10).await.unwrap(),
         1
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn enrolment_tokens_are_consumed_once_and_assignments_are_listed(pool: PgPool) {
+    let store = migrated_store(pool).await;
+    let now = time(1_700_000_000);
+    let agent = Agent::new(AgentId::new(), AgentName::new("edge-south").unwrap(), now);
+    AgentRepository::save(&store, &agent).await.unwrap();
+
+    let target = target(TargetId::new(), now);
+    TargetRepository::save(&store, &target).await.unwrap();
+    store
+        .assign_agents(target.id(), &[agent.id()])
+        .await
+        .unwrap();
+
+    let digest = TokenDigest::new([9; 32]);
+    let enrollment = AgentEnrollment::new(agent.id(), digest, now, time(1_700_001_800)).unwrap();
+    AgentEnrollmentRepository::save(&store, &enrollment)
+        .await
+        .unwrap();
+
+    assert_eq!(store.consume(digest, now).await.unwrap(), Some(agent.id()));
+    assert_eq!(store.consume(digest, now).await.unwrap(), None);
+
+    let expired_digest = TokenDigest::new([8; 32]);
+    let expired = AgentEnrollment::new(
+        agent.id(),
+        expired_digest,
+        time(1_699_000_000),
+        time(1_699_001_800),
+    )
+    .unwrap();
+    AgentEnrollmentRepository::save(&store, &expired)
+        .await
+        .unwrap();
+    assert_eq!(store.consume(expired_digest, now).await.unwrap(), None);
+
+    let listed = store.list_with_agents().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].target().id(), target.id());
+    assert_eq!(listed[0].agent_ids(), &[agent.id()]);
+    assert_eq!(
+        store.agent_ids(target.id()).await.unwrap(),
+        vec![agent.id()]
+    );
+
+    let user = User::new(
+        UserId::new(),
+        Username::new("root").unwrap(),
+        PasswordHash::new("$argon2id$v=19$m=65536,t=2,p=1$salt$encoded").unwrap(),
+        now,
+    );
+    assert!(store.save_if_first(&user).await.unwrap());
+    assert!(!store.save_if_first(&user).await.unwrap());
+    assert_eq!(
+        UserRepository::find(&store, user.id()).await.unwrap(),
+        Some(user)
     );
 }

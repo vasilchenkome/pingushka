@@ -3,6 +3,7 @@ use std::{error::Error, fmt};
 use pingushka_domain::{
     Timestamp,
     identity::{AgentId, TargetId},
+    target::Target,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,5 +164,29 @@ impl CheckSummary {
             return None;
         }
         Some(self.successful_checks as f64 * 100.0 / self.total_checks as f64)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetWithAgents {
+    target: Target,
+    agent_ids: Vec<AgentId>,
+}
+
+impl TargetWithAgents {
+    pub fn new(target: Target, agent_ids: Vec<AgentId>) -> Self {
+        Self { target, agent_ids }
+    }
+
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+
+    pub fn agent_ids(&self) -> &[AgentId] {
+        &self.agent_ids
+    }
+
+    pub fn into_parts(self) -> (Target, Vec<AgentId>) {
+        (self.target, self.agent_ids)
     }
 }

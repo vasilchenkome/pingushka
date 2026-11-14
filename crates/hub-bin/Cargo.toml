@@ -5,6 +5,19 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+axum = { version = "0.8", features = ["ws"] }
 pingushka-application = { path = "../application" }
 pingushka-hub-http = { path = "../hub-http" }
 pingushka-storage-postgres = { path = "../storage-postgres" }
+tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+pingushka-protocol = { path = "../protocol" }
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = "0.30"
+uuid.workspace = true
