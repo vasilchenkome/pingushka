@@ -48,7 +48,8 @@ impl Default for HubConfig {
         Self {
             public_url: "http://localhost:8080".to_owned(),
             install_script_url:
-                "https://raw.githubusercontent.com/pingushka/pingushka/main/install.sh".to_owned(),
+                "https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh"
+                    .to_owned(),
             cookie_secure: false,
             session_ttl: crate::system::days(7),
             enrollment_ttl: Duration::from_secs(30 * 60),

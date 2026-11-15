@@ -38,7 +38,7 @@ impl Config {
         let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
         let public_url = env::var("PUBLIC_URL").unwrap_or_else(|_| format!("http://{bind_addr}"));
         let install_script_url = env::var("INSTALL_SCRIPT_URL").unwrap_or_else(|_| {
-            "https://raw.githubusercontent.com/pingushka/pingushka/main/install.sh".to_owned()
+            "https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh".to_owned()
         });
         let cookie_secure = match env::var("COOKIE_SECURE").as_deref() {
             Ok("1" | "true" | "TRUE" | "yes") => true,

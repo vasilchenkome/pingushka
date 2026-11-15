@@ -11,10 +11,8 @@ use pingushka_application::{
     error::PortError,
     ports::{
         AgentControlGateway, AgentEnrollmentRepository, AgentRepository, Clock, PasswordHasher,
-        SecurityError, SessionRepository, TargetRepository, TokenDigester, TokenGenerator,
-        UserRepository,
+        SecurityError, SessionRepository, TokenDigester, TokenGenerator, UserRepository,
     },
-    queries::TargetWithAgents,
     use_cases::{
         AuthenticateSession, EnrollAgent, EnrollAgentError, Login, LoginError, RegisterAgent,
         RotateAgentToken, SetupAdmin, SetupAdminError,
@@ -25,7 +23,6 @@ use pingushka_domain::{
     agent::Agent,
     enrollment::AgentEnrollment,
     identity::{AgentId, TargetId, TokenDigest, UserId},
-    target::Target,
     user::{PasswordHash, Session, User, Username},
 };
 use sha2::{Digest, Sha256};
@@ -312,48 +309,6 @@ impl AgentRepository for FakeAgents {
 }
 
 #[derive(Default)]
-struct UnusedTargets;
-
-#[async_trait]
-impl TargetRepository for UnusedTargets {
-    async fn save(&self, _target: &Target) -> Result<(), PortError> {
-        Ok(())
-    }
-
-    async fn find(&self, _id: TargetId) -> Result<Option<Target>, PortError> {
-        Ok(None)
-    }
-
-    async fn list(&self) -> Result<Vec<Target>, PortError> {
-        Ok(Vec::new())
-    }
-
-    async fn list_with_agents(&self) -> Result<Vec<TargetWithAgents>, PortError> {
-        Ok(Vec::new())
-    }
-
-    async fn list_for_agent(&self, _agent_id: AgentId) -> Result<Vec<Target>, PortError> {
-        Ok(Vec::new())
-    }
-
-    async fn agent_ids(&self, _target_id: TargetId) -> Result<Vec<AgentId>, PortError> {
-        Ok(Vec::new())
-    }
-
-    async fn assign_agents(
-        &self,
-        _target_id: TargetId,
-        _agent_ids: &[AgentId],
-    ) -> Result<(), PortError> {
-        Ok(())
-    }
-
-    async fn delete(&self, _id: TargetId) -> Result<bool, PortError> {
-        Ok(false)
-    }
-}
-
-#[derive(Default)]
 struct FakeGateway {
     disconnects: Mutex<Vec<AgentId>>,
     configurations: Mutex<Vec<AgentId>>,
@@ -385,9 +340,7 @@ struct Fixture {
     users: Arc<FakeUsers>,
     sessions: Arc<FakeSessions>,
     agents: Arc<FakeAgents>,
-    enrollments: Arc<FakeEnrollments>,
     gateway: Arc<FakeGateway>,
-    tokens: Arc<FakeTokens>,
     setup: SetupAdmin,
     login: Login,
     authenticate: AuthenticateSession,
@@ -451,9 +404,7 @@ fn fixture() -> Fixture {
         users,
         sessions,
         agents,
-        enrollments,
         gateway,
-        tokens: FakeTokens::new(),
         setup,
         login,
         authenticate,
