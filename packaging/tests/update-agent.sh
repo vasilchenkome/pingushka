@@ -80,7 +80,7 @@ expect_failure() {
 # 1. Update to a newer release.
 write_agent "$PINGUSHKA_UPDATE_BIN" "0.1.2"
 release "0.1.3"
-if ! "$UPDATER" >"$TMP/out.log" 2>&1; then
+if ! sh "$UPDATER" >"$TMP/out.log" 2>&1; then
     cat "$TMP/out.log" >&2
     exit 1
 fi
@@ -89,21 +89,21 @@ grep -q "restart pingushka-test.service" "$SYSTEMCTL_LOG"
 
 # 2. Same checksum is a no-op.
 : >"$SYSTEMCTL_LOG"
-"$UPDATER" >"$TMP/out.log"
+sh "$UPDATER" >"$TMP/out.log"
 [ ! -s "$SYSTEMCTL_LOG" ]
 
 # 3. A bad checksum must not replace the binary.
 write_agent "$PINGUSHKA_UPDATE_BIN" "0.1.2"
 release "0.1.3"
 echo "0000000000000000000000000000000000000000000000000000000000000000" >"$RELEASE_DIR"/*.sha256
-expect_failure "$UPDATER"
+expect_failure sh "$UPDATER"
 "$PINGUSHKA_UPDATE_BIN" --version | grep -q "0.1.2"
 
 # 4. A failed restart rolls back to the previous binary.
 write_agent "$PINGUSHKA_UPDATE_BIN" "0.1.2"
 release "0.1.3"
 : >"$SYSTEMCTL_LOG"
-FAIL_RESTART=1 expect_failure "$UPDATER"
+FAIL_RESTART=1 expect_failure sh "$UPDATER"
 "$PINGUSHKA_UPDATE_BIN" --version | grep -q "0.1.2"
 
 # 5. A held lock skips the run.
@@ -112,7 +112,7 @@ release "0.1.3"
 flock "$PINGUSHKA_UPDATE_LOCK" -c "sleep 2" &
 LOCK_PID=$!
 sleep 0.2
-"$UPDATER" >"$TMP/out.log"
+sh "$UPDATER" >"$TMP/out.log"
 kill "$LOCK_PID" 2>/dev/null || true
 wait "$LOCK_PID" 2>/dev/null || true
 grep -q "another update" "$TMP/out.log"
