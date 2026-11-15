@@ -92,7 +92,7 @@ jobs:
           curl -fsS -o /dev/null "http://127.0.0.1:8080$asset"
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/nope)" = "404"
           docker build --target agent -t pingushka-agent:ci .
-          docker run --rm pingushka-agent:ci --version | grep -q "pingushka-agent 0.1.2"
+          docker run --rm pingushka-agent:ci --version | grep -Eq '^pingushka-agent [0-9]+\.[0-9]+\.[0-9]+$'
       - name: Stop stack
         if: always()
         env:
