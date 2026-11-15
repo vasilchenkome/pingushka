@@ -3,6 +3,7 @@ import type {
   ApiErrorBody,
   AuthState,
   CheckResult,
+  Health,
   ProvisionResponse,
   Summary,
   Target,
@@ -55,6 +56,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export const api = {
+  health: () => request<Health>("/api/health"),
   authState: () => request<AuthState>("/api/auth/state"),
   me: () => request<User>("/api/auth/me"),
   setup: (username: string, password: string) =>

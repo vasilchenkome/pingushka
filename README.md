@@ -14,7 +14,7 @@ Pingushka runs HTTP(S), TCP-port and ICMP checks from agents in different networ
 
 ## Status
 
-**v0.1.2 — MVP released.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment.
+**v0.1.3 — MVP released.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment.
 
 The dashboard UI is currently in Russian.
 
@@ -48,7 +48,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Set a strong `POSTGRES_PASSWORD` in `.env`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.1.2`.
+Set a strong `POSTGRES_PASSWORD` in `.env`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.1.3`.
 
 ```sh
 docker compose pull postgres hub
@@ -63,7 +63,7 @@ Create an agent in **Agents** and run the generated command on a Linux host. Eac
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.1.2
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.1.3
 ```
 
 The installer:
@@ -78,7 +78,7 @@ Results are buffered in `/var/lib/pingushka/buffer.jsonl`. Logs: `journalctl -u 
 
 The installer also enables a daily `pingushka-agent-update.timer`. It checks the latest stable release with a randomized delay, verifies the checksum and replaces the binary atomically. If the service does not come back, the previous binary is restored. Disable it with `--no-auto-update`; logs: `journalctl -u pingushka-agent-update -f`.
 
-Use `--version v0.1.2` to pin a release; omit it to install the latest one.
+Use `--version v0.1.3` to pin a release; omit it to install the latest one.
 
 ### Uninstall an agent
 
@@ -106,7 +106,7 @@ POSTGRES_PASSWORD=<long-random-password>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.1.2
+PINGUSHKA_VERSION=0.1.3
 ```
 
 ```sh
@@ -188,8 +188,8 @@ The local PostgreSQL port is bound to `127.0.0.1`. `.env` is ignored by Git. `do
 
 ## Releases and images
 
-- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.1.2` (also `0.1`, `latest`, `main`, `sha-*`), multi-arch.
-- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.1.2`, multi-arch, for container-based probes.
+- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.1.3` (also `0.1`, `latest`, `main`, `sha-*`), multi-arch.
+- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.1.3`, multi-arch, for container-based probes.
 - Release binaries: <https://github.com/vasilchenkome/pingushka/releases>.
 - The `Image` workflow publishes on pushes to `main` and on `v*` tags.
 - The `Release` workflow builds the Hub and agent binaries with `SHA256SUMS` for `install.sh`.

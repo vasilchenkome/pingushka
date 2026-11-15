@@ -1,7 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { ApiError, errorText } from "../api";
 
-function BrandPanel({ compact = false }: { compact?: boolean }) {
+function BrandPanel({
+  compact = false,
+  hubVersion,
+  protocolVersion,
+}: {
+  compact?: boolean;
+  hubVersion: string;
+  protocolVersion: number | null;
+}) {
   return (
     <aside className={compact ? "brand brand--compact" : "brand"}>
       <div className="brandline">
@@ -49,8 +57,8 @@ function BrandPanel({ compact = false }: { compact?: boolean }) {
             входящие порты и белый IP не нужны.
           </p>
           <div className="brand-meta">
-            <span>hub 0.1.0</span>
-            <span>протокол 1</span>
+            <span>hub {hubVersion}</span>
+            <span>протокол {protocolVersion ?? "—"}</span>
             <span>агенты в разных точках</span>
           </div>
         </>
@@ -72,11 +80,20 @@ function authError(error: unknown): string {
 interface LoginProps {
   setupRequired: boolean;
   notice?: string | null;
+  hubVersion: string;
+  protocolVersion: number | null;
   onLogin: (username: string, password: string) => Promise<void>;
   onGoSetup: () => void;
 }
 
-export function LoginScreen({ setupRequired, notice, onLogin, onGoSetup }: LoginProps) {
+export function LoginScreen({
+  setupRequired,
+  notice,
+  hubVersion,
+  protocolVersion,
+  onLogin,
+  onGoSetup,
+}: LoginProps) {
   const [username, setUsername] = useState("demo");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +114,7 @@ export function LoginScreen({ setupRequired, notice, onLogin, onGoSetup }: Login
 
   return (
     <div className="auth-screen">
-      <BrandPanel />
+      <BrandPanel hubVersion={hubVersion} protocolVersion={protocolVersion} />
       <main className="auth-wrap">
         <form className="auth" onSubmit={submit}>
           <p className="auth-host">{window.location.host}</p>

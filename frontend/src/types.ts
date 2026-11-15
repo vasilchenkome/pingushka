@@ -7,6 +7,14 @@ export interface AuthState {
   setup_required: boolean;
 }
 
+export interface Health {
+  status: string;
+  version: string;
+  uptime_seconds: number;
+  database: string;
+  protocol_version: number;
+}
+
 export interface Agent {
   id: string;
   name: string;
