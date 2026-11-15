@@ -16,6 +16,8 @@ export function App() {
   const [setupRequired, setSetupRequired] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [hubVersion, setHubVersion] = useState("—");
+  const [protocolVersion, setProtocolVersion] = useState<number | null>(null);
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -51,6 +53,14 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     const boot = async () => {
+      try {
+        const health = await api.health();
+        if (cancelled) return;
+        setHubVersion(health.version);
+        setProtocolVersion(health.protocol_version);
+      } catch {
+        // Health is best-effort; the auth flow below still works.
+      }
       try {
         const state = await api.authState();
         if (cancelled) return;
@@ -218,6 +228,8 @@ export function App() {
       <LoginScreen
         setupRequired={setupRequired}
         notice={notice}
+        hubVersion={hubVersion}
+        protocolVersion={protocolVersion}
         onLogin={async (username, password) => {
           const result = await api.login(username, password);
           setUser(result.user);
@@ -317,7 +329,7 @@ export function App() {
             <div className="online">
               <i className="dot" /> {online} из {agents.length} онлайн
             </div>
-            <div className="mono">hub 0.1.0 · protocol 1</div>
+            <div className="mono">hub {hubVersion} · protocol {protocolVersion ?? "—"}</div>
             <button type="button" className="link-button" onClick={logout}>
               Выйти
             </button>

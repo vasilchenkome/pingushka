@@ -14,7 +14,7 @@ Pingushka выполняет проверки HTTP(S), TCP-портов и ICMP 
 
 ## Статус
 
-**v0.1.2 — MVP выпущен.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании.
+**v0.1.3 — MVP выпущен.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании.
 
 Интерфейс дашборда пока на русском.
 
@@ -48,7 +48,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Задайте надёжный `POSTGRES_PASSWORD` в `.env`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.1.2`.
+Задайте надёжный `POSTGRES_PASSWORD` в `.env`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.1.3`.
 
 ```sh
 docker compose pull postgres hub
@@ -63,7 +63,7 @@ docker compose up -d --no-build postgres hub
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.1.2
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.1.3
 ```
 
 Установщик:
@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/instal
 
 Установщик также включает ежедневный `pingushka-agent-update.timer`. Он проверяет последний стабильный релиз со случайной задержкой, сверяет контрольную сумму и атомарно заменяет бинарь. Если служба не поднялась, возвращается предыдущий бинарь. Отключить: `--no-auto-update`; логи: `journalctl -u pingushka-agent-update -f`.
 
-`--version v0.1.2` фиксирует релиз; без него ставится последний.
+`--version v0.1.3` фиксирует релиз; без него ставится последний.
 
 ### Удаление агента
 
@@ -106,7 +106,7 @@ POSTGRES_PASSWORD=<длинный-случайный-пароль>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.1.2
+PINGUSHKA_VERSION=0.1.3
 ```
 
 ```sh
@@ -188,8 +188,8 @@ Vite отдаёт <http://127.0.0.1:5173> и проксирует `/api` на `1
 
 ## Релизы и образы
 
-- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.1.2` (также `0.1`, `latest`, `main`, `sha-*`), multi-arch.
-- Образ агента: `ghcr.io/vasilchenkome/pingushka-agent:0.1.2`, multi-arch, для контейнерных проб.
+- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.1.3` (также `0.1`, `latest`, `main`, `sha-*`), multi-arch.
+- Образ агента: `ghcr.io/vasilchenkome/pingushka-agent:0.1.3`, multi-arch, для контейнерных проб.
 - Релизные бинари: <https://github.com/vasilchenkome/pingushka/releases>.
 - Workflow `Image` публикует образы при пуше в `main` и по тегам `v*`.
 - Workflow `Release` собирает Hub и агентов с `SHA256SUMS` для `install.sh`.
