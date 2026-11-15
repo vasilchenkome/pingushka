@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Agent, CheckResult, Summary, Target } from "../types";
 import { api } from "../api";
 import {
@@ -49,6 +49,14 @@ export function TargetDetail({
   busy,
 }: DetailProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const requestDeleteRef = useRef<HTMLButtonElement>(null);
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
+  const wasConfirmingRef = useRef(false);
+  useEffect(() => {
+    if (confirmDelete) cancelDeleteRef.current?.focus();
+    else if (wasConfirmingRef.current) requestDeleteRef.current?.focus();
+    wasConfirmingRef.current = confirmDelete;
+  }, [confirmDelete]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [agentSummaries, setAgentSummaries] = useState<Record<string, Summary>>({});
   const [chartResults, setChartResults] = useState<Record<string, CheckResult[]>>({});
@@ -126,7 +134,15 @@ export function TargetDetail({
   const periodLabel = period === "24h" ? "24 ч" : "7 дн";
 
   return (
-    <div className="detail-inner">
+    <div
+      className="detail-inner"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && confirmDelete) {
+          event.preventDefault();
+          setConfirmDelete(false);
+        }
+      }}
+    >
       <header className="detail-head">
         <div className="detail-title">
           <h2>{target.name}</h2>
@@ -264,24 +280,29 @@ export function TargetDetail({
         </p>
       </section>
 
+      {confirmDelete ? (
+        <div className="confirm-panel" role="status">
+          <p className="confirm-panel__title">Удалить цель «{target.name}»? Это действие нельзя отменить.</p>
+        </div>
+      ) : null}
       <footer className="detail-actions">
         <button type="button" className="btn" onClick={onCheck} disabled={busy}>
           {busy ? "Запускаем…" : "Проверить сейчас"}
         </button>
-        <button type="button" className="btn btn--ghost" onClick={onEdit}>
+        <button type="button" className="btn btn--ghost" aria-label={`Изменить цель ${target.name}`} onClick={onEdit}>
           Изменить
         </button>
         {confirmDelete ? (
           <>
-            <button type="button" className="btn btn--danger" onClick={onDelete}>
+            <button type="button" className="btn btn--danger" aria-label={`Удалить цель ${target.name}`} onClick={onDelete}>
               Удалить цель
             </button>
-            <button type="button" className="link-button" onClick={() => setConfirmDelete(false)}>
+            <button ref={cancelDeleteRef} type="button" className="link-button" aria-label={`Отменить удаление цели ${target.name}`} onClick={() => setConfirmDelete(false)}>
               Отмена
             </button>
           </>
         ) : (
-          <button type="button" className="link-button" onClick={() => setConfirmDelete(true)}>
+          <button ref={requestDeleteRef} type="button" className="link-button" aria-label={`Запросить удаление цели ${target.name}`} onClick={() => setConfirmDelete(true)}>
             Удалить
           </button>
         )}

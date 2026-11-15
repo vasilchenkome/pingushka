@@ -83,6 +83,10 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
     rule: AlertRule | null;
   } | null>(null);
   const [channelForm, setChannelForm] = useState<{ channel: AlertChannel | null } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<
+    { kind: "rule"; rule: AlertRule } | { kind: "channel"; channel: AlertChannel } | null
+  >(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const load = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -142,19 +146,10 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
   };
   const openNewRule = () => setRuleForm({ target: null, group: null, rule: null });
 
-  const removeRule = async (rule: AlertRule) => {
-    const label = rule.target_name ?? rule.group_name ?? "правило";
-    if (!window.confirm(`Удалить правило для «${label}»?`)) return;
-    setBusyId(rule.id);
-    try {
-      await api.deleteAlertRuleById(rule.id);
-      setToast("Правило удалено.");
-      await load(true);
-    } catch (cause) {
-      setToast(errorText(cause));
-    } finally {
-      setBusyId(null);
-    }
+  const requestRuleDelete = (rule: AlertRule) => {
+    if (busyId !== null) return;
+    setConfirmError(null);
+    setPendingDelete({ kind: "rule", rule });
   };
 
   const testChannel = async (channel: AlertChannel) => {
@@ -169,15 +164,29 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
     }
   };
 
-  const removeChannel = async (channel: AlertChannel) => {
-    if (!window.confirm(`Удалить канал «${channel.name}»? Правила, где он используется, потеряют этот канал.`)) return;
-    setBusyId(channel.id);
+  const requestChannelDelete = (channel: AlertChannel) => {
+    if (busyId !== null) return;
+    setConfirmError(null);
+    setPendingDelete({ kind: "channel", channel });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    const id = pendingDelete.kind === "rule" ? pendingDelete.rule.id : pendingDelete.channel.id;
+    setBusyId(id);
+    setConfirmError(null);
     try {
-      await api.deleteAlertChannel(channel.id);
-      setToast("Канал удалён.");
+      if (pendingDelete.kind === "rule") {
+        await api.deleteAlertRuleById(pendingDelete.rule.id);
+        setToast("Правило удалено.");
+      } else {
+        await api.deleteAlertChannel(pendingDelete.channel.id);
+        setToast("Канал удалён.");
+      }
       await load(true);
+      setPendingDelete(null);
     } catch (cause) {
-      setToast(errorText(cause));
+      setConfirmError(errorText(cause));
     } finally {
       setBusyId(null);
     }
@@ -196,6 +205,12 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
     }
   };
 
+  const closeConfirmation = () => {
+    if (busyId !== null) return;
+    setPendingDelete(null);
+    setConfirmError(null);
+  };
+
   return (
     <div className="screen alerts-screen">
       <header className="appbar">
@@ -203,7 +218,7 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
           <span className="mark" />
         </div>
         <div className="title-row">
-          <h1>Оповещения</h1>
+          <h1 tabIndex={-1} data-dialog-fallback-focus>Оповещения</h1>
           <span className="count">{rules.length}</span>
           <button
             type="button"
@@ -344,7 +359,7 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
                     </div>
                   </div>
                   <div className="rule-actions">
-                    <button type="button" className="btn btn--ghost" onClick={() => {
+                    <button type="button" className="btn btn--ghost" aria-label={`Изменить правило для ${rule.target_name ?? rule.group_name ?? "цель"}`} onClick={() => {
                       if (rule.scope === "group") {
                         const group = groups.find((entry) => entry.id === rule.group_id);
                         if (group) openGroupRule(group);
@@ -355,7 +370,7 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
                     }}>
                       Изменить
                     </button>
-                    <button type="button" className="link-button danger" disabled={busyId === rule.id} onClick={() => void removeRule(rule)}>
+                    <button type="button" className="link-button danger" aria-label={`Удалить правило для ${rule.target_name ?? rule.group_name ?? "цели"}`} disabled={busyId !== null} onClick={() => requestRuleDelete(rule)}>
                       Удалить
                     </button>
                   </div>
@@ -395,13 +410,13 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
                   <b>{channel.name}</b>
                   <span className="muted">{channel.enabled ? "включён" : "выключен"} · {relativeTime(channel.updated_at)}</span>
                   <div className="channel-actions">
-                    <button type="button" className="btn btn--ghost" disabled={busyId === channel.id} onClick={() => void testChannel(channel)}>
+                    <button type="button" className="btn btn--ghost" aria-label={`Отправить тест в канал ${channel.name}`} disabled={busyId === channel.id} onClick={() => void testChannel(channel)}>
                       Тест
                     </button>
-                    <button type="button" className="btn btn--ghost" onClick={() => setChannelForm({ channel })}>
+                    <button type="button" className="btn btn--ghost" aria-label={`Изменить канал ${channel.name}`} onClick={() => setChannelForm({ channel })}>
                       Изменить
                     </button>
-                    <button type="button" className="link-button danger" disabled={busyId === channel.id} onClick={() => void removeChannel(channel)}>
+                    <button type="button" className="link-button danger" aria-label={`Удалить канал ${channel.name}`} disabled={busyId !== null} onClick={() => requestChannelDelete(channel)}>
                       Удалить
                     </button>
                   </div>
@@ -451,7 +466,7 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
                     <span className="muted">{relativeTime(event.created_at)}</span>
                     <span>
                       {event.status === "failed" ? (
-                        <button type="button" className="link-button" disabled={busyId === event.id} onClick={() => void retry(event)}>
+                        <button type="button" className="link-button" aria-label={`Повторить доставку для ${event.target_name ?? event.group_name ?? "цели"} через ${event.channel_name}`} disabled={busyId === event.id} onClick={() => void retry(event)}>
                           Повторить
                         </button>
                       ) : null}
@@ -494,6 +509,52 @@ export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: Al
           }}
           onError={(message) => setToast(message)}
         />
+      ) : null}
+
+      {pendingDelete ? (
+        <Dialog
+          title={
+            pendingDelete.kind === "rule"
+              ? `Удалить правило для «${pendingDelete.rule.target_name ?? pendingDelete.rule.group_name ?? "правило"}»?`
+              : `Удалить канал «${pendingDelete.channel.name}»?`
+          }
+          subtitle="Действие нельзя отменить"
+          alert
+          descriptionId="delete-confirm-description"
+          onClose={closeConfirmation}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                data-dialog-autofocus
+                onClick={closeConfirmation}
+                disabled={busyId !== null}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="btn btn--danger"
+                onClick={() => void confirmDelete()}
+                disabled={busyId !== null}
+              >
+                {busyId !== null
+                  ? "Удаляем…"
+                  : pendingDelete.kind === "rule"
+                    ? "Удалить правило"
+                    : "Удалить канал"}
+              </button>
+            </>
+          }
+        >
+          <p id="delete-confirm-description" className="dialog-lead">
+            {pendingDelete.kind === "rule"
+              ? "Уведомления по этому правилу будут остановлены."
+              : `Правила, где используется канал «${pendingDelete.channel.name}», потеряют этот канал.`}
+          </p>
+          {confirmError ? <p className="form-error" role="alert">{confirmError}</p> : null}
+        </Dialog>
       ) : null}
 
       {toast ? (
@@ -597,6 +658,7 @@ function RuleDialog({
             <label htmlFor="rule-scope">Область правила</label>
             <select
               id="rule-scope"
+              data-dialog-autofocus={!editing ? true : undefined}
               value={scope}
               onChange={(event) => setScope(event.target.value as "target" | "group")}
             >
@@ -645,7 +707,7 @@ function RuleDialog({
           </div>
         )}
         <label className="check">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          <input type="checkbox" checked={enabled} data-dialog-autofocus={editing ? true : undefined} onChange={(event) => setEnabled(event.target.checked)} />
           Правило включено
         </label>
         <div className="field">
@@ -792,7 +854,7 @@ function ChannelDialog({
         </div>
         <label className="field">
           <span className="label">Название</span>
-          <input value={name} placeholder={KIND_LABEL[kind]} onChange={(event) => setName(event.target.value)} />
+          <input data-dialog-autofocus value={name} placeholder={KIND_LABEL[kind]} onChange={(event) => setName(event.target.value)} />
         </label>
         {kind === "telegram" ? (
           <>

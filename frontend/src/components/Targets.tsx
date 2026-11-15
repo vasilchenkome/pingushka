@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, BulkGroupMode, BulkTagMode, Target, TargetGroup } from "../types";
 import { api, errorText } from "../api";
 import {
@@ -162,6 +162,17 @@ export function TargetsScreen(props: TargetsProps) {
   });
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagPanel, setTagPanel] = useState(false);
+  const tagFilterButtonRef = useRef<HTMLButtonElement>(null);
+  const tagFilterRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!tagPanel) return;
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && !tagFilterRef.current?.contains(target)) setTagPanel(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress);
+  }, [tagPanel]);
   const [groupManager, setGroupManager] = useState(false);
   const [bulk, setBulk] = useState(false);
   const [chosen, setChosen] = useState<string[]>([]);
@@ -260,7 +271,7 @@ export function TargetsScreen(props: TargetsProps) {
           <span className="mark" />
         </div>
         <div className="title-row">
-          <h1>Цели</h1>
+          <h1 tabIndex={-1} data-dialog-fallback-focus>Цели</h1>
           <span className="count">{targets.length}</span>
           <button type="button" className="add" aria-label="Добавить цель" onClick={onAdd}>
             <span aria-hidden="true">+</span>
@@ -373,7 +384,7 @@ export function TargetsScreen(props: TargetsProps) {
             <option value="checked">Последняя проверка</option>
             <option value="group">Группа</option>
           </select>
-          <button type="button" className="btn btn--ghost btn--small" onClick={flipDirection}>
+          <button type="button" className="btn btn--ghost btn--small" aria-label={direction === "asc" ? "По возрастанию" : "По убыванию"} onClick={flipDirection}>
             {direction === "asc" ? "↑" : "↓"}
           </button>
         </div>
@@ -392,17 +403,34 @@ export function TargetsScreen(props: TargetsProps) {
         >
           Группы…
         </button>
-        <div className="tag-filter">
+        <div
+          className="tag-filter"
+          ref={tagFilterRef}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && tagPanel) {
+              event.preventDefault();
+              setTagPanel(false);
+              tagFilterButtonRef.current?.focus();
+            }
+          }}
+        >
           <button
+            ref={tagFilterButtonRef}
             type="button"
             className={`btn btn--ghost btn--small${tagFilter.length > 0 ? " is-on" : ""}`}
             aria-expanded={tagPanel}
+            aria-controls={tagPanel ? "tag-filter-options" : undefined}
             onClick={() => setTagPanel((open) => !open)}
           >
             Теги{tagFilter.length > 0 ? ` · ${tagFilter.length}` : ""}
           </button>
           {tagPanel ? (
-            <div className="tag-filter__panel">
+            <div
+              id="tag-filter-options"
+              className="tag-filter__panel"
+              role="group"
+              aria-label="Фильтр по тегам"
+            >
               {allTags.length === 0 ? <p className="field-hint">Тегов пока нет.</p> : null}
               {allTags.map((tag) => (
                 <button
@@ -508,7 +536,7 @@ export function TargetsScreen(props: TargetsProps) {
           {error ? <span className="bulk-bar__error">{error}</span> : null}
           {bulkAction === "group" ? (
             <div className="bulk-form">
-              <select value={bulkGroup} onChange={(event) => setBulkGroup(event.target.value)}>
+              <select aria-label="Назначить группу выбранным целям" value={bulkGroup} onChange={(event) => setBulkGroup(event.target.value)}>
                 <option value="">Не менять</option>
                 <option value="__clear">Без группы</option>
                 {groups.map((group) => (
@@ -523,6 +551,7 @@ export function TargetsScreen(props: TargetsProps) {
                   value={bulkGroupName}
                   onChange={(event) => setBulkGroupName(event.target.value)}
                   placeholder="Название группы"
+                  aria-label="Название новой группы"
                 />
               ) : null}
               <button
@@ -538,6 +567,7 @@ export function TargetsScreen(props: TargetsProps) {
           {bulkAction === "tags" ? (
             <div className="bulk-form">
               <select
+                aria-label="Операция с тегами выбранных целей"
                 value={bulkTagMode}
                 onChange={(event) =>
                   setBulkTagMode(event.target.value as "add" | "remove" | "replace")
@@ -549,6 +579,7 @@ export function TargetsScreen(props: TargetsProps) {
               </select>
               <TagInput
                 id="bulk-tags"
+                ariaLabel="Теги для выбранных целей"
                 value={bulkTags}
                 onChange={setBulkTags}
                 suggestions={allTags}
@@ -647,15 +678,6 @@ export function TargetsScreen(props: TargetsProps) {
                                         <span
                                           key={tag}
                                           className={`tag tag--target tag--${tagTone(tag)}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            toggleTagFilter(tag);
-                                          }}
-                                          role="button"
-                                          tabIndex={0}
-                                          onKeyDown={(event) => {
-                                            if (event.key === "Enter") toggleTagFilter(tag);
-                                          }}
                                         >
                                           {tag}
                                         </span>

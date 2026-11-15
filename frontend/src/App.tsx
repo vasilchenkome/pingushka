@@ -278,6 +278,9 @@ export function App() {
       setToast("Цель удалена.");
       if (selectedId === target.id) setSelectedId(null);
       await refresh(true);
+      window.requestAnimationFrame(() =>
+        document.querySelector<HTMLElement>("[data-dialog-fallback-focus]")?.focus({ preventScroll: true }),
+      );
     } catch (error) {
       if (!handleApiError(error)) setToast(errorText(error));
     }

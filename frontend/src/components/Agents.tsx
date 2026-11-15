@@ -120,7 +120,7 @@ export function AgentsScreen({
           <span className="mark" />
         </div>
         <div className="title-row">
-          <h1>Агенты</h1>
+          <h1 tabIndex={-1} data-dialog-fallback-focus>Агенты</h1>
           <span className="count">{agents.length}</span>
           <button
             type="button"
@@ -240,7 +240,7 @@ export function AgentsScreen({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="msk-1"
-                autoFocus
+                data-dialog-autofocus
                 required
               />
               <p className="field-hint">Латинские буквы, цифры, дефис. Например, fra-2.</p>
@@ -258,21 +258,22 @@ export function AgentsScreen({
         <Dialog
           title={`Удалить агента ${toDelete.name}?`}
           subtitle="действие необратимо"
+          alert
+          descriptionId="agent-delete-description"
           onClose={() => setToDelete(null)}
           footer={
             <>
-              <button type="button" className="btn btn--ghost" onClick={() => setToDelete(null)}>
+              <button type="button" className="btn btn--ghost" data-dialog-autofocus onClick={() => setToDelete(null)}>
                 Отмена
               </button>
-              <button type="button" className="btn btn--danger" onClick={remove} disabled={busy}>
+              <button type="button" className="btn btn--danger" aria-label={`Подтвердить удаление агента ${toDelete.name}`} onClick={remove} disabled={busy}>
                 {busy ? "Удаляем…" : "Удалить агента"}
               </button>
             </>
           }
         >
-          <p className="dialog-lead">
-            Агент будет снят со всех целей, его соединение закроется. История проверок останется в
-            базе.
+          <p id="agent-delete-description" className="dialog-lead">
+            Агент будет снят со всех целей, его соединение закроется. История проверок останется в базе.
           </p>
         </Dialog>
       ) : null}
