@@ -7,6 +7,9 @@ license.workspace = true
 [dependencies]
 async-trait.workspace = true
 pingushka-domain = { path = "../domain" }
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true

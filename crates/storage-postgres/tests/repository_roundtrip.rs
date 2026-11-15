@@ -1,4 +1,5 @@
 use pingushka_application::{
+    alerts::{AlertChannel, AlertRepository, AlertRuleRecord, ChannelKind, OutboxDraft},
     ports::{
         AgentEnrollmentRepository, AgentRepository, CheckResultRepository, SessionRepository,
         TargetRepository, UserRepository,
@@ -8,6 +9,7 @@ use pingushka_application::{
 use pingushka_domain::{
     Timestamp,
     agent::{Agent, AgentName},
+    alert::{AlertEvent, AlertMode, AlertRule},
     check::{
         CheckFailure, CheckFailureKind, CheckMode, CheckOutcome, CheckResult, LatencyMs, StatusCode,
     },
@@ -17,7 +19,9 @@ use pingushka_domain::{
     user::{PasswordHash, Session, User, Username},
 };
 use pingushka_storage_postgres::PgStore;
+use serde_json::json;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 async fn migrated_store(pool: PgPool) -> PgStore {
     let store = PgStore::new(pool);
@@ -271,4 +275,69 @@ async fn enrolment_tokens_are_consumed_once_and_assignments_are_listed(pool: PgP
         UserRepository::find(&store, user.id()).await.unwrap(),
         Some(user)
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn alert_channels_rules_and_outbox_roundtrip(pool: PgPool) {
+    let store = migrated_store(pool).await;
+    let now = time(1_700_000_000);
+    let target = target(TargetId::new(), now);
+    TargetRepository::save(&store, &target).await.unwrap();
+
+    let channel = AlertChannel {
+        id: Uuid::new_v4(),
+        name: "hooks".to_owned(),
+        kind: ChannelKind::Webhook,
+        config_encrypted: vec![1, 2, 3],
+        enabled: true,
+        created_at: now,
+        updated_at: now,
+    };
+    AlertRepository::save_channel(&store, &channel)
+        .await
+        .unwrap();
+
+    let rule = AlertRule::new(target.id(), AlertMode::All, 3, 1, 60, now).unwrap();
+    let rule_id = AlertRepository::save_rule(
+        &store,
+        &AlertRuleRecord {
+            id: Uuid::new_v4(),
+            rule,
+        },
+        &[channel.id],
+    )
+    .await
+    .unwrap();
+
+    let views = store.rule_views().await.unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].id, rule_id);
+    assert_eq!(views[0].channels, vec![channel.id]);
+    assert_eq!(views[0].target_kind, "http");
+
+    let payload = json!({"event": "down", "target": {"name": target.name().as_str()}});
+    store
+        .apply_transition(
+            &views[0].state,
+            &[OutboxDraft {
+                channel_id: channel.id,
+                target_id: target.id().as_uuid(),
+                dedupe_key: format!("{rule_id}:down:1"),
+                event: AlertEvent::Down,
+                payload: payload.clone(),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let due = store.due_outbox(10).await.unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].kind, ChannelKind::Webhook);
+    assert_eq!(due[0].payload, payload);
+    store.mark_outbox_sent(due[0].id).await.unwrap();
+
+    let events = store.list_events(10).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status, "sent");
+    assert!(!store.retry_event(events[0].id).await.unwrap());
 }
