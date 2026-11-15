@@ -3,7 +3,11 @@ use std::{error::Error, fmt, num::NonZeroU16};
 use time::OffsetDateTime;
 use url::{Host, Url};
 
-use crate::{check::StatusCode, identity::TargetId};
+use crate::{
+    check::StatusCode,
+    identity::{TargetGroupId, TargetId},
+    organization::{TargetOrganization, TargetTag, TargetTagSet},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TargetError {
@@ -20,6 +24,13 @@ pub enum TargetError {
     InvalidTimeout,
     TimeoutNotBelowInterval,
     UpdatedBeforeCreated,
+    EmptyGroup,
+    GroupTooLong,
+    InvalidGroup,
+    EmptyTag,
+    TagTooLong,
+    InvalidTag,
+    TooManyTags,
 }
 
 impl fmt::Display for TargetError {
@@ -38,6 +49,13 @@ impl fmt::Display for TargetError {
             Self::InvalidTimeout => "timeout must be between 100 and 30000 milliseconds",
             Self::TimeoutNotBelowInterval => "timeout must be shorter than the check interval",
             Self::UpdatedBeforeCreated => "target update time cannot be before creation time",
+            Self::EmptyGroup => "target group name cannot be empty",
+            Self::GroupTooLong => "target group name is too long",
+            Self::InvalidGroup => "target group name contains invalid characters",
+            Self::EmptyTag => "target tag cannot be empty",
+            Self::TagTooLong => "target tag is too long",
+            Self::InvalidTag => "target tag contains invalid characters",
+            Self::TooManyTags => "target cannot have more than 10 tags",
         };
         formatter.write_str(message)
     }
@@ -229,19 +247,26 @@ pub struct Target {
     spec: TargetSpec,
     interval: CheckIntervalSecs,
     timeout: TimeoutMs,
+    organization: TargetOrganization,
     enabled: bool,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
 
 impl Target {
-    pub fn new(id: TargetId, config: TargetConfig, now: OffsetDateTime) -> Self {
+    pub fn new(
+        id: TargetId,
+        config: TargetConfig,
+        organization: TargetOrganization,
+        now: OffsetDateTime,
+    ) -> Self {
         Self {
             id,
             name: config.name,
             spec: config.spec,
             interval: config.interval,
             timeout: config.timeout,
+            organization,
             enabled: true,
             created_at: now,
             updated_at: now,
@@ -251,6 +276,7 @@ impl Target {
     pub fn restore(
         id: TargetId,
         config: TargetConfig,
+        organization: TargetOrganization,
         enabled: bool,
         created_at: OffsetDateTime,
         updated_at: OffsetDateTime,
@@ -258,7 +284,7 @@ impl Target {
         if updated_at < created_at {
             return Err(TargetError::UpdatedBeforeCreated);
         }
-        let mut target = Self::new(id, config, created_at);
+        let mut target = Self::new(id, config, organization, created_at);
         target.enabled = enabled;
         target.updated_at = updated_at;
         Ok(target)
@@ -284,6 +310,22 @@ impl Target {
         self.timeout
     }
 
+    pub fn organization(&self) -> &TargetOrganization {
+        &self.organization
+    }
+
+    pub fn group_id(&self) -> Option<TargetGroupId> {
+        self.organization.group_id()
+    }
+
+    pub fn tags(&self) -> &[TargetTag] {
+        self.organization.tags()
+    }
+
+    pub fn tag_set(&self) -> &TargetTagSet {
+        self.organization.tag_set()
+    }
+
     pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -304,6 +346,7 @@ impl Target {
     pub fn update(
         &mut self,
         config: TargetConfig,
+        organization: TargetOrganization,
         enabled: bool,
         now: OffsetDateTime,
     ) -> Result<(), TargetError> {
@@ -314,6 +357,7 @@ impl Target {
         self.spec = config.spec;
         self.interval = config.interval;
         self.timeout = config.timeout;
+        self.organization = organization;
         self.enabled = enabled;
         self.updated_at = now;
         Ok(())

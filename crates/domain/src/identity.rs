@@ -30,6 +30,7 @@ macro_rules! define_id {
 define_id!(AgentId);
 define_id!(CheckResultId);
 define_id!(TargetId);
+define_id!(TargetGroupId);
 define_id!(UserId);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

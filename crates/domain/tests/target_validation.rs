@@ -1,5 +1,6 @@
 use pingushka_domain::Timestamp;
 use pingushka_domain::identity::TargetId;
+use pingushka_domain::organization::TargetOrganization;
 use pingushka_domain::target::{
     CheckIntervalSecs, HttpUrl, ProbeHost, Target, TargetConfig, TargetName, TargetSpec, TimeoutMs,
 };
@@ -17,6 +18,7 @@ fn valid_target(
     Ok(Target::new(
         TargetId::new(),
         config,
+        TargetOrganization::empty(),
         Timestamp::from_unix_timestamp(1_700_000_000).expect("valid test timestamp"),
     ))
 }
@@ -81,7 +83,15 @@ fn restored_target_keeps_persisted_state() {
         TimeoutMs::new(5000).unwrap(),
     )
     .unwrap();
-    let target = Target::restore(TargetId::new(), config, false, created_at, updated_at).unwrap();
+    let target = Target::restore(
+        TargetId::new(),
+        config,
+        TargetOrganization::empty(),
+        false,
+        created_at,
+        updated_at,
+    )
+    .unwrap();
 
     assert!(!target.is_enabled());
     assert_eq!(target.created_at(), created_at);
@@ -99,7 +109,14 @@ fn restored_target_rejects_updated_time_before_creation() {
         TimeoutMs::new(5000).unwrap(),
     )
     .unwrap();
-    let target = Target::restore(TargetId::new(), config, true, created_at, earlier);
+    let target = Target::restore(
+        TargetId::new(),
+        config,
+        TargetOrganization::empty(),
+        true,
+        created_at,
+        earlier,
+    );
 
     assert!(target.is_err());
 }
