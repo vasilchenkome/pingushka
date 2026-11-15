@@ -7,9 +7,13 @@ CONFIG_PATH="/etc/pingushka/agent.toml"
 BUFFER_PATH="/var/lib/pingushka/buffer.jsonl"
 BINARY_PATH="/usr/local/bin/pingushka-agent"
 SERVICE_PATH="/etc/systemd/system/pingushka-agent.service"
+UPDATER_PATH="/usr/local/lib/pingushka/update-agent.sh"
+UPDATE_SERVICE_PATH="/etc/systemd/system/pingushka-agent-update.service"
+UPDATE_TIMER_PATH="/etc/systemd/system/pingushka-agent-update.timer"
 SERVICE_USER="pingushka"
 VERSION=""
 BASE_URL="${PINGUSHKA_AGENT_BASE_URL:-}"
+AUTO_UPDATE=1
 
 usage() {
     cat <<'EOF'
@@ -20,8 +24,10 @@ Options:
   --enrollment-token <token> One-time enrollment token for this agent
   --config <path>            Configuration path (default /etc/pingushka/agent.toml)
   --buffer <path>            Result buffer path (default /var/lib/pingushka/buffer.jsonl)
-  --version <tag>            Release tag, for example v0.1.0
+  --version <tag>            Release tag, for example v0.1.2
   --base-url <url>           Override the release download base URL
+  --no-auto-update           Do not install the daily update timer
+  --auto-update              Install the daily update timer (default)
 EOF
 }
 
@@ -65,6 +71,14 @@ while [ "$#" -gt 0 ]; do
             require_value "$@"
             BASE_URL="$2"
             shift 2
+            ;;
+        --auto-update)
+            AUTO_UPDATE=1
+            shift
+            ;;
+        --no-auto-update)
+            AUTO_UPDATE=0
+            shift
             ;;
         --help|-h)
             usage
@@ -183,6 +197,64 @@ systemctl daemon-reload
 systemctl enable "pingushka-agent.service" >/dev/null
 systemctl restart "pingushka-agent.service"
 
+if [ "$AUTO_UPDATE" -eq 1 ]; then
+    echo "Installing auto-update timer"
+    if curl -fsSL --retry 3 --retry-delay 2 "${BASE_URL}/update-agent.sh" -o "${TMP_DIR}/update-agent.sh" \
+        && curl -fsSL --retry 3 --retry-delay 2 "${BASE_URL}/update-agent.sh.sha256" -o "${TMP_DIR}/update-agent.sh.sha256"; then
+        (
+            cd "$TMP_DIR"
+            sha256sum -c "update-agent.sh.sha256" >/dev/null
+        ) || die "auto-update checksum verification failed"
+        install -d -m 0755 "$(dirname "$UPDATER_PATH")"
+        install -m 0755 "${TMP_DIR}/update-agent.sh" "$UPDATER_PATH"
+        cat >"$UPDATE_SERVICE_PATH" <<EOF
+[Unit]
+Description=Pingushka agent auto-update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${UPDATER_PATH}
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/usr/local/bin /usr/local/lib/pingushka /run
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        cat >"$UPDATE_TIMER_PATH" <<EOF
+[Unit]
+Description=Daily Pingushka agent auto-update
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=24h
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl daemon-reload
+        systemctl enable --now "pingushka-agent-update.timer" >/dev/null
+        AUTO_UPDATE_STATUS="enabled (daily)"
+    else
+        echo "warning: updater asset is not available at ${BASE_URL}; auto-update was not installed" >&2
+        AUTO_UPDATE_STATUS="disabled (updater asset unavailable)"
+    fi
+else
+    systemctl disable --now "pingushka-agent-update.timer" >/dev/null 2>&1 || true
+    rm -f "$UPDATE_SERVICE_PATH" "$UPDATE_TIMER_PATH" "$UPDATER_PATH"
+    systemctl daemon-reload
+    AUTO_UPDATE_STATUS="disabled"
+fi
+
 echo "Pingushka agent installed and started."
+echo "Auto-update: ${AUTO_UPDATE_STATUS}"
 echo "Status: systemctl status pingushka-agent"
 echo "Logs:   journalctl -u pingushka-agent -f"

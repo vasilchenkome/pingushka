@@ -14,7 +14,7 @@ Pingushka выполняет проверки HTTP(S), TCP-портов и ICMP 
 
 ## Статус
 
-**v0.1.1 — MVP выпущен.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании.
+**v0.1.2 — MVP выпущен.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании.
 
 Интерфейс дашборда пока на русском.
 
@@ -26,6 +26,7 @@ Pingushka выполняет проверки HTTP(S), TCP-портов и ICMP 
 - **Распределённые пробы** — цель можно назначить любому числу агентов; каждый проверяет её из своей сети.
 - **История и сводка** — аптайм, средняя задержка, p95 и число проверок за 24 часа и 7 дней.
 - **Буфер при обрыве** — агент хранит результаты в ограниченном JSONL-буфере и отправляет их после переподключения.
+- **Автообновление агента** — ежедневный systemd-таймер скачивает последний стабильный релиз, проверяет SHA-256 и откатывается, если служба не перезапустилась.
 - **Одноразовая регистрация** — 256-битный токен обменивается на постоянный credential; Hub хранит только его SHA-256.
 - **Авторизация** — создание администратора при первом запуске, Argon2id, HttpOnly-сессии, ограничение попыток входа.
 - **Docker и HTTPS** — образ Hub сам раздаёт SPA; Docker Compose включает PostgreSQL и Caddy с автоматическим TLS.
@@ -47,7 +48,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Задайте надёжный `POSTGRES_PASSWORD` в `.env`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.1.1`.
+Задайте надёжный `POSTGRES_PASSWORD` в `.env`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.1.2`.
 
 ```sh
 docker compose pull postgres hub
@@ -62,7 +63,7 @@ docker compose up -d --no-build postgres hub
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.1.1
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.1.2
 ```
 
 Установщик:
@@ -75,16 +76,21 @@ curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/instal
 
 Буфер результатов хранится в `/var/lib/pingushka/buffer.jsonl`. Логи: `journalctl -u pingushka-agent -f`.
 
-`--version v0.1.1` фиксирует релиз; без него ставится последний.
+Установщик также включает ежедневный `pingushka-agent-update.timer`. Он проверяет последний стабильный релиз со случайной задержкой, сверяет контрольную сумму и атомарно заменяет бинарь. Если служба не поднялась, возвращается предыдущий бинарь. Отключить: `--no-auto-update`; логи: `journalctl -u pingushka-agent-update -f`.
+
+`--version v0.1.2` фиксирует релиз; без него ставится последний.
 
 ### Удаление агента
 
 ```sh
 sudo systemctl disable --now pingushka-agent.service
+sudo systemctl disable --now pingushka-agent-update.timer
 sudo rm -f /etc/systemd/system/pingushka-agent.service
+sudo rm -f /etc/systemd/system/pingushka-agent-update.service
+sudo rm -f /etc/systemd/system/pingushka-agent-update.timer
 sudo systemctl daemon-reload
-sudo rm -f /usr/local/bin/pingushka-agent
-sudo rm -rf /etc/pingushka /var/lib/pingushka
+sudo rm -f /usr/local/bin/pingushka-agent /usr/local/bin/pingushka-agent.previous
+sudo rm -rf /etc/pingushka /var/lib/pingushka /usr/local/lib/pingushka
 sudo rm -f /etc/sysctl.d/99-pingushka.conf
 sudo userdel pingushka
 ```
@@ -100,7 +106,7 @@ POSTGRES_PASSWORD=<длинный-случайный-пароль>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.1.1
+PINGUSHKA_VERSION=0.1.2
 ```
 
 ```sh
@@ -165,6 +171,8 @@ docker compose up -d postgres
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+sh -n install.sh
+bash packaging/tests/update-agent.sh
 
 cd frontend
 npm install
@@ -177,7 +185,8 @@ Vite отдаёт <http://127.0.0.1:5173> и проксирует `/api` на `1
 
 ## Релизы и образы
 
-- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.1.1` (также `0.1`, `latest`, `main`, `sha-*`), multi-arch.
+- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.1.2` (также `0.1`, `latest`, `main`, `sha-*`), multi-arch.
+- Образ агента: `ghcr.io/vasilchenkome/pingushka-agent:0.1.2`, multi-arch, для контейнерных проб.
 - Релизные бинари: <https://github.com/vasilchenkome/pingushka/releases>.
 - Workflow `Image` публикует образы при пуше в `main` и по тегам `v*`.
 - Workflow `Release` собирает Hub и агентов с `SHA256SUMS` для `install.sh`.
@@ -186,6 +195,7 @@ Vite отдаёт <http://127.0.0.1:5173> и проксирует `/api` на `1
 
 - Агенты только для Linux x86_64 и ARM64.
 - Оповещений пока нет: дашборд показывает состояние и историю, но не отправляет уведомления.
+- Автообновление перезапускает только `pingushka-agent.service`; дополнительные службы агента на том же хосте нужно перезапускать вручную.
 - Один администратор, без ролей и SSO.
 - Интерфейс дашборда только на русском.
 

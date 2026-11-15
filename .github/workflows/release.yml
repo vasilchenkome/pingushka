@@ -66,12 +66,14 @@ jobs:
         run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/pingushka-hub dist/pingushka-hub-linux-x86_64
+          cp packaging/update-agent.sh dist/update-agent.sh
           cd dist
           sha256sum pingushka-hub-linux-x86_64 > pingushka-hub-linux-x86_64.sha256
+          sha256sum update-agent.sh > update-agent.sh.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: pingushka-hub-linux-x86_64
-          path: dist/pingushka-hub-linux-x86_64*
+          path: dist/*
 
   publish:
     runs-on: ubuntu-latest
