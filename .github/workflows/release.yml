@@ -44,7 +44,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/pingushka-agent" "dist/${{ matrix.asset }}"
           cd dist
           sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}*
@@ -70,7 +70,7 @@ jobs:
           cd dist
           sha256sum pingushka-hub-linux-x86_64 > pingushka-hub-linux-x86_64.sha256
           sha256sum update-agent.sh > update-agent.sh.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pingushka-hub-linux-x86_64
           path: dist/*
@@ -81,11 +81,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           generate_release_notes: true
