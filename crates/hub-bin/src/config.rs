@@ -12,6 +12,7 @@ pub struct Config {
     pub retention: Duration,
     pub manual_check_cooldown: Duration,
     pub prune_interval: Duration,
+    pub static_dir: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +60,10 @@ impl Config {
                 10,
             )?),
             prune_interval: minutes(parse_env("PRUNE_INTERVAL_MINUTES", 60)?),
+            static_dir: env::var("STATIC_DIR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(std::path::PathBuf::from),
         })
     }
 }

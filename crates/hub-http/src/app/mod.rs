@@ -13,7 +13,8 @@ use std::{
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    routing::{delete, get, patch, post},
+    http::{HeaderValue, header},
+    routing::{any, delete, get, patch, post},
 };
 use pingushka_application::{
     ports::{
@@ -27,7 +28,9 @@ use pingushka_application::{
         UpdateTarget,
     },
 };
+use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
+use tower_http::{services::ServeDir, services::ServeFile, set_header::SetResponseHeaderLayer};
 
 use crate::app::{error::ApiError, ws::AgentRegistry};
 
@@ -41,6 +44,7 @@ pub struct HubConfig {
     pub manual_check_cooldown: Duration,
     pub body_limit_bytes: usize,
     pub request_timeout: Duration,
+    pub static_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for HubConfig {
@@ -57,6 +61,7 @@ impl Default for HubConfig {
             manual_check_cooldown: Duration::from_secs(10),
             body_limit_bytes: 64 * 1024,
             request_timeout: Duration::from_secs(10),
+            static_dir: None,
         }
     }
 }
@@ -222,7 +227,8 @@ async fn not_found() -> ApiError {
 pub fn build_router(state: Arc<AppState>) -> Router {
     let body_limit = state.config.body_limit_bytes;
     let request_timeout = state.config.request_timeout;
-    Router::new()
+    let static_dir = state.config.static_dir.clone();
+    let routes = Router::new()
         .route("/api/health", get(health::health))
         .route("/api/auth/state", get(session::state))
         .route("/api/setup", post(session::setup))
@@ -242,7 +248,28 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/targets/{id}/check", post(targets::check_now))
         .route("/api/targets/{id}/results", get(targets::history))
         .route("/api/summary", get(targets::summary))
-        .fallback(not_found)
+        .route("/api/{*rest}", any(not_found));
+
+    let router = match static_dir {
+        Some(dir) if dir.join("index.html").is_file() => {
+            let assets = ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=31536000, immutable"),
+                ))
+                .service(ServeDir::new(dir.join("assets")));
+            let spa = ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ))
+                .service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))));
+            routes.nest_service("/assets", assets).fallback_service(spa)
+        }
+        _ => routes.fallback(not_found),
+    };
+
+    router
         .layer(DefaultBodyLimit::max(body_limit))
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,

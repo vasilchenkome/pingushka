@@ -57,7 +57,23 @@ curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/instal
 
 Порт локальной базы привязан только к `127.0.0.1`. Не публикуйте `.env`: файл исключён из Git. Команда `docker compose down -v` удалит локальный том базы и все данные в нём.
 
-Hub читает переменные `DATABASE_URL`, `BIND_ADDR`, `PUBLIC_URL`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `ENROLLMENT_TTL_MINUTES`, `RETENTION_DAYS`, `MANUAL_CHECK_COOLDOWN_SECS` и `PRUNE_INTERVAL_MINUTES`.
+Hub читает переменные `DATABASE_URL`, `BIND_ADDR`, `PUBLIC_URL`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `ENROLLMENT_TTL_MINUTES`, `RETENTION_DAYS`, `MANUAL_CHECK_COOLDOWN_SECS`, `PRUNE_INTERVAL_MINUTES`, `STATIC_DIR` и `INSTALL_SCRIPT_URL`.
+
+## Развёртывание
+
+Образ Hub собирает SPA и Rust-бинарь в несколько стадий и сам раздаёт бандл:
+
+```sh
+docker compose up -d postgres hub
+```
+
+Дашборд открывается на `http://127.0.0.1:8080`, `/api` отдаётся с того же origin. Для публичной установки задайте `DOMAIN` с именем, которое резолвится на машину, включите `COOKIE_SECURE=true` и поднимите весь стек с Caddy:
+
+```sh
+docker compose up -d
+```
+
+Caddy терминирует TLS с автоматическими сертификатами и проксирует на `hub:8080`; наружу открыты только 80 и 443. Образы публикуются в `ghcr.io/vasilchenkome/pingushka-hub` по тегам workflow `Image`; локально можно собрать через `docker compose build hub`.
 
 ## Лицензия
 

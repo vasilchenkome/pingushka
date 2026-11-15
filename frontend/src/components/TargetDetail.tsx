@@ -52,6 +52,7 @@ export function TargetDetail({
   const [summary, setSummary] = useState<Summary | null>(null);
   const [agentSummaries, setAgentSummaries] = useState<Record<string, Summary>>({});
   const [chartResults, setChartResults] = useState<Record<string, CheckResult[]>>({});
+  const [period, setPeriod] = useState<"24h" | "7d">("24h");
 
   useEffect(() => {
     let cancelled = false;
@@ -72,14 +73,14 @@ export function TargetDetail({
           Promise.all(
             target.agent_ids.map(async (id) => {
               try {
-                return [id, await api.summary(target.id, id)] as const;
+                return [id, await api.summary(target.id, id, period)] as const;
               } catch {
                 return null;
               }
             }),
           ),
         ]);
-        const totals = await api.summary(target.id).catch(() => null);
+        const totals = await api.summary(target.id, undefined, period).catch(() => null);
         if (cancelled) return;
         setChartResults(Object.fromEntries(series));
         setAgentSummaries(
@@ -94,7 +95,7 @@ export function TargetDetail({
     return () => {
       cancelled = true;
     };
-  }, [target.id, target.updated_at, selectedAgentIds.join(","), metrics.lastCheckedAt]);
+  }, [target.id, target.updated_at, selectedAgentIds.join(","), metrics.lastCheckedAt, period]);
 
   const rows = agentChecks(target, metrics, agents);
   const checksByAgent = rows.map((row) => ({
@@ -120,7 +121,9 @@ export function TargetDetail({
   const windowStart = windowEnd - 24 * 3600;
   const uptime = summary?.uptime_percent ?? metrics.uptime;
   const p95 = summary?.p95_latency_ms ?? metrics.p95;
+  const average = summary?.average_latency_ms ?? metrics.averageLatency;
   const checksTotal = summary?.total_checks ?? metrics.total;
+  const periodLabel = period === "24h" ? "24 ч" : "7 дн";
 
   return (
     <div className="detail-inner">
@@ -145,17 +148,37 @@ export function TargetDetail({
         </div>
       </header>
 
+      <div className="period-row">
+        <span>Сводка за период</span>
+        <div className="seg seg--small" role="group" aria-label="Период сводки">
+          <button
+            type="button"
+            aria-pressed={period === "24h"}
+            onClick={() => setPeriod("24h")}
+          >
+            24 часа
+          </button>
+          <button type="button" aria-pressed={period === "7d"} onClick={() => setPeriod("7d")}>
+            7 дней
+          </button>
+        </div>
+      </div>
+
       <dl className="stats">
         <div className="stat">
           <dt>аптайм</dt>
           <dd>{formatUptime(uptime)}</dd>
         </div>
         <div className="stat">
+          <dt>среднее</dt>
+          <dd>{formatNumber(average)} мс</dd>
+        </div>
+        <div className="stat">
           <dt>p95</dt>
           <dd>{formatNumber(p95)} мс</dd>
         </div>
         <div className="stat">
-          <dt>проверок за 24 ч</dt>
+          <dt>проверок</dt>
           <dd>{formatNumber(checksTotal)}</dd>
         </div>
       </dl>
@@ -236,7 +259,8 @@ export function TargetDetail({
           </tbody>
         </table>
         <p className="detail-note">
-          Последний сигнал: {relativeTime(metrics.lastCheckedAt)}. История хранится 30 дней.
+          Проверок за {periodLabel}: {formatNumber(checksTotal)}. Последний сигнал:{" "}
+          {relativeTime(metrics.lastCheckedAt)}. История хранится 30 дней.
         </p>
       </section>
 

@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             enrollment_ttl: config.enrollment_ttl,
             retention: config.retention,
             manual_check_cooldown: config.manual_check_cooldown,
+            static_dir: config.static_dir.clone(),
             ..HubConfig::default()
         },
     );

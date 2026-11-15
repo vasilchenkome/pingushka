@@ -16,5 +16,41 @@ services:
       retries: 12
       start_period: 5s
 
+  hub:
+    image: ghcr.io/vasilchenkome/pingushka-hub:${PINGUSHKA_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-pingushka}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pingushka}
+      BIND_ADDR: 0.0.0.0:8080
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      INSTALL_SCRIPT_URL: ${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      STATIC_DIR: /app/static
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    depends_on:
+      - hub
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  caddy-data:
+  caddy-config:

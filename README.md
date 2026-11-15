@@ -57,7 +57,23 @@ Requirements: stable Rust toolchain and Docker Desktop with Docker Compose.
 
 The local database port is bound to `127.0.0.1` only. Keep `.env` private; it is ignored by Git. `docker compose down -v` removes the local database volume and all its data.
 
-The Hub reads `DATABASE_URL`, `BIND_ADDR`, `PUBLIC_URL`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `ENROLLMENT_TTL_MINUTES`, `RETENTION_DAYS`, `MANUAL_CHECK_COOLDOWN_SECS` and `PRUNE_INTERVAL_MINUTES`.
+The Hub reads `DATABASE_URL`, `BIND_ADDR`, `PUBLIC_URL`, `COOKIE_SECURE`, `SESSION_TTL_HOURS`, `ENROLLMENT_TTL_MINUTES`, `RETENTION_DAYS`, `MANUAL_CHECK_COOLDOWN_SECS`, `PRUNE_INTERVAL_MINUTES`, `STATIC_DIR` and `INSTALL_SCRIPT_URL`.
+
+## Deployment
+
+The Hub image builds the SPA and the Rust binary in stages and serves the bundle itself:
+
+```sh
+docker compose up -d postgres hub
+```
+
+The dashboard is available at `http://127.0.0.1:8080`, and the same origin serves `/api`. For a public installation, set `DOMAIN` to a hostname that resolves to the machine, set `COOKIE_SECURE=true`, and start the full stack including Caddy:
+
+```sh
+docker compose up -d
+```
+
+Caddy terminates TLS with automatic certificates and proxies to `hub:8080`; only ports 80 and 443 are exposed publicly. Images are published to `ghcr.io/vasilchenkome/pingushka-hub` on version tags by the `Image` workflow; `docker compose build hub` builds locally instead.
 
 ## License
 

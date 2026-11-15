@@ -27,6 +27,7 @@ surge-ping = "0.9"
 sqlx = { version = "0.9", default-features = false, features = ["derive", "json", "macros", "migrate", "postgres", "runtime-tokio", "time", "tls-rustls-ring-webpki", "uuid"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = "0.5"
 toml = { version = "0.9", features = ["parse", "display", "serde"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
