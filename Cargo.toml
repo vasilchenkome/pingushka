@@ -28,6 +28,6 @@ sqlx = { version = "0.9", default-features = false, features = ["derive", "json"
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = "0.5"
-toml = { version = "0.9", features = ["parse", "display", "serde"] }
+toml = { version = "1.2", features = ["parse", "display", "serde"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
