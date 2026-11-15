@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 interface DialogProps {
@@ -8,16 +8,68 @@ interface DialogProps {
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  alert?: boolean;
+  descriptionId?: string;
 }
 
-export function Dialog({ title, subtitle, onClose, children, footer, wide }: DialogProps) {
+export function Dialog({ title, subtitle, onClose, children, footer, wide, alert, descriptionId }: DialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () =>
+      [...dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => element.getClientRects().length > 0);
+    const initialFocus = window.matchMedia("(pointer: fine)").matches && navigator.maxTouchPoints === 0
+      ? dialog.querySelector<HTMLElement>("[data-dialog-autofocus]") ?? focusable()[0]
+      : dialog.querySelector<HTMLElement>(".dialog-head .icon-button") ?? dialog;
+    const focusFrame = window.requestAnimationFrame(() => initialFocus?.focus({ preventScroll: true }));
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      if (elements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
+
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected && previousFocus !== document.body) {
+        previousFocus.focus({ preventScroll: true });
+      } else {
+        document.querySelector<HTMLElement>("[data-dialog-fallback-focus]")?.focus({ preventScroll: true });
+      }
+    };
+  }, []);
 
   return createPortal(
     <div
@@ -28,10 +80,13 @@ export function Dialog({ title, subtitle, onClose, children, footer, wide }: Dia
       }}
     >
       <div
+        ref={dialogRef}
         className={wide ? "dialog dialog--wide" : "dialog"}
-        role="dialog"
+        role={alert ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby="dialog-title"
+        aria-describedby={descriptionId}
+        tabIndex={-1}
       >
         <header className="dialog-head">
           <div>

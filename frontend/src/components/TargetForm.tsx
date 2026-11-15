@@ -123,7 +123,7 @@ export function TargetForm({
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="api.example.com"
-            autoFocus
+            data-dialog-autofocus
             required
           />
         </div>
@@ -271,7 +271,7 @@ export function TargetForm({
                 <span className="agent-choice__body">
                   <strong>{agent.name}</strong>
                   <em className={agent.connected ? "state state--ok" : "state state--off"}>
-                    {agent.connected ? "online" : "offline"}
+                    {agent.connected ? "Онлайн" : "Офлайн · ждёт подключения"}
                   </em>
                 </span>
               </label>
