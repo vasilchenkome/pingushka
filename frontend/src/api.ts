@@ -1,5 +1,10 @@
 import type {
   Agent,
+  AlertChannel,
+  AlertChannelInput,
+  AlertEvent,
+  AlertRule,
+  AlertRuleInput,
   ApiErrorBody,
   AuthState,
   CheckResult,
@@ -107,6 +112,27 @@ export const api = {
     request<Summary>(
       `/api/summary?period=${period}&target_id=${targetId}${agentId ? `&agent_id=${agentId}` : ""}`,
     ),
+
+  alertChannels: () => request<AlertChannel[]>("/api/alerts/channels"),
+  createAlertChannel: (payload: AlertChannelInput) =>
+    request<AlertChannel>("/api/alerts/channels", { method: "POST", body: payload }),
+  updateAlertChannel: (id: string, payload: AlertChannelInput) =>
+    request<AlertChannel>(`/api/alerts/channels/${id}`, { method: "PUT", body: payload }),
+  deleteAlertChannel: (id: string) =>
+    request<void>(`/api/alerts/channels/${id}`, { method: "DELETE" }),
+  testAlertChannel: (id: string) =>
+    request<{ ok: boolean; message: string }>(`/api/alerts/channels/${id}/test`, {
+      method: "POST",
+    }),
+  alertRules: () => request<AlertRule[]>("/api/alerts/rules"),
+  saveAlertRule: (payload: AlertRuleInput) =>
+    request<AlertRule>("/api/alerts/rules", { method: "PUT", body: payload }),
+  deleteAlertRule: (targetId: string) =>
+    request<void>(`/api/alerts/rules/${targetId}`, { method: "DELETE" }),
+  alertEvents: (limit = 100) =>
+    request<AlertEvent[]>(`/api/alerts/events?limit=${limit}`),
+  retryAlertEvent: (id: string) =>
+    request<{ retried: boolean }>(`/api/alerts/events/${id}/retry`, { method: "POST" }),
 };
 
 export function isUnauthorized(error: unknown): boolean {

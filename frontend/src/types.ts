@@ -77,3 +77,67 @@ export interface Summary {
 export interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
+
+export type AlertChannelKind = "telegram" | "webhook" | "email";
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  kind: AlertChannelKind;
+  enabled: boolean;
+  configured: boolean;
+  updated_at: string;
+}
+
+export interface AlertChannelInput {
+  name: string;
+  kind: AlertChannelKind;
+  config: Record<string, unknown>;
+  enabled: boolean;
+}
+
+export interface AlertState {
+  status: "ok" | "pending" | "firing";
+  consecutive_failures: number;
+  consecutive_successes: number;
+  last_result_at: string | null;
+  last_notified_at: string | null;
+  opened_at: string | null;
+}
+
+export interface AlertRule {
+  id: string;
+  target_id: string;
+  target_name: string;
+  target_kind: string;
+  target_ref: string;
+  enabled: boolean;
+  mode: "all" | "any";
+  failure_threshold: number;
+  recovery_threshold: number;
+  cooldown_secs: number;
+  channel_ids: string[];
+  state: AlertState;
+}
+
+export interface AlertRuleInput {
+  target_id: string;
+  enabled: boolean;
+  mode: "all" | "any";
+  failure_threshold: number;
+  recovery_threshold: number;
+  cooldown_secs: number;
+  channel_ids: string[];
+}
+
+export interface AlertEvent {
+  id: string;
+  event: "down" | "recovered";
+  target_name: string;
+  channel_name: string;
+  status: "pending" | "sending" | "sent" | "failed";
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
