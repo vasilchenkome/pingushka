@@ -2688,19 +2688,19 @@ button.tag--target {
   }
 }
 
-.row {
+.row--target {
   display: block;
   min-height: 0;
   padding: 0;
   position: relative;
 }
 
-.row .who > span:last-child {
+.row--target .who > span:last-child {
   flex: 1;
   min-width: 0;
 }
 
-.who .name {
+.row--target .who .name {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
