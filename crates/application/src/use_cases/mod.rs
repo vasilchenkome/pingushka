@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod auth;
 pub mod checks;
+pub mod groups;
 pub mod maintenance;
 pub mod targets;
 
@@ -13,7 +14,12 @@ pub use auth::{
     SetupAdmin, SetupAdminError,
 };
 pub use checks::{RecordCheckBatch, RecordCheckBatchError};
+pub use groups::{
+    CreateTargetGroup, DeleteTargetGroup, ListTargetGroups, RenameTargetGroup,
+    TargetGroupUseCaseError,
+};
 pub use maintenance::{PruneOldData, PruneOldDataError, PruneReport};
 pub use targets::{
-    CreateTarget, DeleteTarget, TargetUseCaseError, TriggerManualCheck, UpdateTarget,
+    BulkUpdateResult, BulkUpdateTargets, CreateTarget, DeleteTarget, GroupChange, TagChange,
+    TargetUseCaseError, TriggerManualCheck, UpdateTarget,
 };

@@ -6,7 +6,8 @@ use pingushka_domain::{
     agent::Agent,
     check::CheckResult,
     enrollment::AgentEnrollment,
-    identity::{AgentId, TargetId, TokenDigest, UserId},
+    identity::{AgentId, TargetGroupId, TargetId, TokenDigest, UserId},
+    organization::{TargetGroup, TargetGroupName, TargetGroupWithCounts, TargetOrganization},
     target::Target,
     user::{PasswordHash, Session, User, Username},
 };
@@ -69,7 +70,28 @@ pub trait TargetRepository: Send + Sync {
         target_id: TargetId,
         agent_ids: &[AgentId],
     ) -> Result<(), PortError>;
+    async fn find_many(&self, ids: &[TargetId]) -> Result<Vec<Target>, PortError>;
+    async fn save_organizations(
+        &self,
+        updates: &[(TargetId, TargetOrganization)],
+    ) -> Result<(), PortError>;
     async fn delete(&self, id: TargetId) -> Result<bool, PortError>;
+}
+
+#[async_trait]
+pub trait TargetGroupRepository: Send + Sync {
+    async fn save(&self, group: &TargetGroup) -> Result<(), PortError>;
+    async fn find(&self, id: TargetGroupId) -> Result<Option<TargetGroup>, PortError>;
+    async fn find_by_name(&self, name: &TargetGroupName) -> Result<Option<TargetGroup>, PortError>;
+    async fn list_with_counts(&self) -> Result<Vec<TargetGroupWithCounts>, PortError>;
+    async fn delete(&self, id: TargetGroupId) -> Result<DeleteGroupOutcome, PortError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeleteGroupOutcome {
+    Deleted,
+    NotFound,
+    HasRules,
 }
 
 #[async_trait]
