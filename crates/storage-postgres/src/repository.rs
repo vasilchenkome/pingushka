@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use pingushka_application::{
     error::PortError,
     ports::{
-        AgentEnrollmentRepository, AgentRepository, CheckResultRepository, HealthCheck,
-        SessionRepository, TargetRepository, UserRepository,
+        AgentEnrollmentRepository, AgentRepository, CheckResultRepository, DeleteGroupOutcome,
+        HealthCheck, SessionRepository, TargetGroupRepository, TargetRepository, UserRepository,
     },
     queries::{CheckSummary, HistoryFilter, SummaryFilter, TargetWithAgents},
 };
@@ -14,18 +14,19 @@ use pingushka_domain::{
     agent::Agent,
     check::CheckResult,
     enrollment::AgentEnrollment,
-    identity::{AgentId, TargetId, TokenDigest, UserId},
+    identity::{AgentId, TargetGroupId, TargetId, TokenDigest, UserId},
+    organization::{TargetGroup, TargetGroupName, TargetGroupWithCounts, TargetTag, TargetTagSet},
     target::Target,
     user::{Session, User, Username},
 };
-use sqlx::{Postgres, QueryBuilder, types::Json};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction, types::Json};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
     PgStore,
     mapper::{
-        AgentRow, CheckResultRow, SessionRow, StoredTargetSpec, TargetRow, UserRow,
+        AgentRow, CheckResultRow, SessionRow, StoredTargetSpec, TargetGroupRow, TargetRow, UserRow,
         target_kind_from_spec,
     },
 };
@@ -49,6 +50,70 @@ where
     row.try_into()
 }
 
+async fn load_tags(
+    pool: &PgPool,
+    target_ids: &[Uuid],
+) -> Result<HashMap<Uuid, TargetTagSet>, PortError> {
+    if target_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT target_id, tag FROM target_tags WHERE target_id = ANY($1) ORDER BY tag",
+    )
+    .bind(target_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(map_database_error)?;
+    let mut grouped: HashMap<Uuid, Vec<String>> = HashMap::new();
+    for (target_id, tag) in rows {
+        grouped.entry(target_id).or_default().push(tag);
+    }
+    grouped
+        .into_iter()
+        .map(|(target_id, tags)| {
+            TargetTagSet::parse(tags)
+                .map(|set| (target_id, set))
+                .map_err(|_| PortError::InvalidData)
+        })
+        .collect()
+}
+
+async fn load_targets(pool: &PgPool, rows: Vec<TargetRow>) -> Result<Vec<Target>, PortError> {
+    let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let mut tags = load_tags(pool, &ids).await?;
+    rows.into_iter()
+        .map(|row| {
+            let tags = tags.remove(&row.id).unwrap_or_else(TargetTagSet::empty);
+            row.with_tags(tags)
+        })
+        .collect()
+}
+
+async fn replace_tags(
+    transaction: &mut Transaction<'_, Postgres>,
+    target_id: Uuid,
+    tags: &[TargetTag],
+) -> Result<(), PortError> {
+    sqlx::query("DELETE FROM target_tags WHERE target_id = $1")
+        .bind(target_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(map_database_error)?;
+    if tags.is_empty() {
+        return Ok(());
+    }
+    let mut query = QueryBuilder::<Postgres>::new("INSERT INTO target_tags (target_id, tag) ");
+    query.push_values(tags, |mut values, tag| {
+        values.push_bind(target_id).push_bind(tag.as_str());
+    });
+    query
+        .build()
+        .execute(&mut **transaction)
+        .await
+        .map_err(map_database_error)?;
+    Ok(())
+}
+
 #[async_trait]
 impl HealthCheck for PgStore {
     async fn check(&self) -> Result<(), PortError> {
@@ -69,8 +134,9 @@ impl TargetRepository for PgStore {
             i32::try_from(target.interval().get()).map_err(|_| PortError::InvalidData)?;
         let timeout_ms =
             i32::try_from(target.timeout().get()).map_err(|_| PortError::InvalidData)?;
+        let mut transaction = self.pool().begin().await.map_err(map_database_error)?;
         sqlx::query(
-            "INSERT INTO targets (id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind, spec_json = EXCLUDED.spec_json, interval_secs = EXCLUDED.interval_secs, timeout_ms = EXCLUDED.timeout_ms, enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at",
+            "INSERT INTO targets (id, name, kind, spec_json, interval_secs, timeout_ms, enabled, group_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind, spec_json = EXCLUDED.spec_json, interval_secs = EXCLUDED.interval_secs, timeout_ms = EXCLUDED.timeout_ms, enabled = EXCLUDED.enabled, group_id = EXCLUDED.group_id, updated_at = EXCLUDED.updated_at",
         )
         .bind(target.id().as_uuid())
         .bind(target.name().as_str())
@@ -79,33 +145,43 @@ impl TargetRepository for PgStore {
         .bind(interval_secs)
         .bind(timeout_ms)
         .bind(target.is_enabled())
+        .bind(target.group_id().map(TargetGroupId::as_uuid))
         .bind(target.created_at())
         .bind(target.updated_at())
-        .execute(self.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(map_database_error)?;
-        Ok(())
+        replace_tags(&mut transaction, target.id().as_uuid(), target.tags()).await?;
+        transaction.commit().await.map_err(map_database_error)
     }
 
     async fn find(&self, id: TargetId) -> Result<Option<Target>, PortError> {
         let row = sqlx::query_as::<_, TargetRow>(
-            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at FROM targets WHERE id = $1",
+            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, group_id, created_at, updated_at FROM targets WHERE id = $1",
         )
         .bind(id.as_uuid())
         .fetch_optional(self.pool())
         .await
         .map_err(map_database_error)?;
-        row.map(row_to_domain).transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let tags = load_tags(self.pool(), &[row.id]).await?;
+        let tags = tags
+            .get(&row.id)
+            .cloned()
+            .unwrap_or_else(TargetTagSet::empty);
+        row.with_tags(tags).map(Some)
     }
 
     async fn list(&self) -> Result<Vec<Target>, PortError> {
         let rows = sqlx::query_as::<_, TargetRow>(
-            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, created_at, updated_at FROM targets ORDER BY created_at, id",
+            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, group_id, created_at, updated_at FROM targets ORDER BY created_at, id",
         )
         .fetch_all(self.pool())
         .await
         .map_err(map_database_error)?;
-        rows.into_iter().map(row_to_domain).collect()
+        load_targets(self.pool(), rows).await
     }
 
     async fn list_with_agents(&self) -> Result<Vec<TargetWithAgents>, PortError> {
@@ -147,13 +223,13 @@ impl TargetRepository for PgStore {
 
     async fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<Target>, PortError> {
         let rows = sqlx::query_as::<_, TargetRow>(
-            "SELECT t.id, t.name, t.kind, t.spec_json, t.interval_secs, t.timeout_ms, t.enabled, t.created_at, t.updated_at FROM targets t JOIN target_agents ta ON ta.target_id = t.id WHERE ta.agent_id = $1 AND t.enabled = TRUE ORDER BY t.created_at, t.id",
+            "SELECT t.id, t.name, t.kind, t.spec_json, t.interval_secs, t.timeout_ms, t.enabled, t.group_id, t.created_at, t.updated_at FROM targets t JOIN target_agents ta ON ta.target_id = t.id WHERE ta.agent_id = $1 AND t.enabled = TRUE ORDER BY t.created_at, t.id",
         )
         .bind(agent_id.as_uuid())
         .fetch_all(self.pool())
         .await
         .map_err(map_database_error)?;
-        rows.into_iter().map(row_to_domain).collect()
+        load_targets(self.pool(), rows).await
     }
 
     async fn assign_agents(
@@ -202,6 +278,43 @@ impl TargetRepository for PgStore {
         transaction.commit().await.map_err(map_database_error)
     }
 
+    async fn find_many(&self, ids: &[TargetId]) -> Result<Vec<Target>, PortError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uuids: Vec<Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query_as::<_, TargetRow>(
+            "SELECT id, name, kind, spec_json, interval_secs, timeout_ms, enabled, group_id, created_at, updated_at FROM targets WHERE id = ANY($1) ORDER BY created_at, id",
+        )
+        .bind(uuids)
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        load_targets(self.pool(), rows).await
+    }
+
+    async fn save_organizations(
+        &self,
+        updates: &[(TargetId, pingushka_domain::organization::TargetOrganization)],
+    ) -> Result<(), PortError> {
+        let mut transaction = self.pool().begin().await.map_err(map_database_error)?;
+        for (target_id, organization) in updates {
+            let result =
+                sqlx::query("UPDATE targets SET group_id = $2, updated_at = $3 WHERE id = $1")
+                    .bind(target_id.as_uuid())
+                    .bind(organization.group_id().map(TargetGroupId::as_uuid))
+                    .bind(OffsetDateTime::now_utc())
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(map_database_error)?;
+            if result.rows_affected() == 0 {
+                return Err(PortError::NotFound);
+            }
+            replace_tags(&mut transaction, target_id.as_uuid(), organization.tags()).await?;
+        }
+        transaction.commit().await.map_err(map_database_error)
+    }
+
     async fn delete(&self, id: TargetId) -> Result<bool, PortError> {
         let result = sqlx::query("DELETE FROM targets WHERE id = $1")
             .bind(id.as_uuid())
@@ -209,6 +322,104 @@ impl TargetRepository for PgStore {
             .await
             .map_err(map_database_error)?;
         Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl TargetGroupRepository for PgStore {
+    async fn save(&self, group: &TargetGroup) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO target_groups (id, name, created_at, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at",
+        )
+        .bind(group.id().as_uuid())
+        .bind(group.name().as_str())
+        .bind(group.created_at())
+        .bind(group.updated_at())
+        .execute(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        Ok(())
+    }
+
+    async fn find(&self, id: TargetGroupId) -> Result<Option<TargetGroup>, PortError> {
+        let row = sqlx::query_as::<_, (Uuid, String, OffsetDateTime, OffsetDateTime)>(
+            "SELECT id, name, created_at, updated_at FROM target_groups WHERE id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(|(id, name, created_at, updated_at)| {
+            TargetGroup::restore(
+                TargetGroupId::from_uuid(id),
+                TargetGroupName::new(name).map_err(|_| PortError::InvalidData)?,
+                created_at,
+                updated_at,
+            )
+            .map_err(|_| PortError::InvalidData)
+        })
+        .transpose()
+    }
+
+    async fn find_by_name(&self, name: &TargetGroupName) -> Result<Option<TargetGroup>, PortError> {
+        let row = sqlx::query_as::<_, (Uuid, String, OffsetDateTime, OffsetDateTime)>(
+            "SELECT id, name, created_at, updated_at FROM target_groups WHERE lower(name) = lower($1)",
+        )
+        .bind(name.as_str())
+        .fetch_optional(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        row.map(|(id, name, created_at, updated_at)| {
+            TargetGroup::restore(
+                TargetGroupId::from_uuid(id),
+                TargetGroupName::new(name).map_err(|_| PortError::InvalidData)?,
+                created_at,
+                updated_at,
+            )
+            .map_err(|_| PortError::InvalidData)
+        })
+        .transpose()
+    }
+
+    async fn list_with_counts(&self) -> Result<Vec<TargetGroupWithCounts>, PortError> {
+        let rows = sqlx::query_as::<_, TargetGroupRow>(
+            "SELECT g.id, g.name, g.created_at, g.updated_at, (SELECT COUNT(*) FROM targets t WHERE t.group_id = g.id)::BIGINT AS target_count, (SELECT COUNT(*) FROM alert_rules r WHERE r.group_id = g.id)::BIGINT AS rule_count FROM target_groups g ORDER BY lower(g.name), g.id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .map_err(map_database_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn delete(&self, id: TargetGroupId) -> Result<DeleteGroupOutcome, PortError> {
+        let mut transaction = self.pool().begin().await.map_err(map_database_error)?;
+        let exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM target_groups WHERE id = $1)",
+        )
+        .bind(id.as_uuid())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+        if !exists {
+            return Ok(DeleteGroupOutcome::NotFound);
+        }
+        let has_rules = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM alert_rules WHERE group_id = $1)",
+        )
+        .bind(id.as_uuid())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(map_database_error)?;
+        if has_rules {
+            return Ok(DeleteGroupOutcome::HasRules);
+        }
+        sqlx::query("DELETE FROM target_groups WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_database_error)?;
+        transaction.commit().await.map_err(map_database_error)?;
+        Ok(DeleteGroupOutcome::Deleted)
     }
 }
 

@@ -9,12 +9,13 @@ use pingushka_application::{
 use pingushka_domain::{
     Timestamp,
     agent::{Agent, AgentName},
-    alert::{AlertEvent, AlertMode, AlertRule},
+    alert::{AlertEvent, AlertMode, AlertRule, AlertScope},
     check::{
         CheckFailure, CheckFailureKind, CheckMode, CheckOutcome, CheckResult, LatencyMs, StatusCode,
     },
     enrollment::AgentEnrollment,
     identity::{AgentId, CheckResultId, TargetId, TokenDigest, UserId},
+    organization::TargetOrganization,
     target::{CheckIntervalSecs, HttpUrl, Target, TargetConfig, TargetName, TargetSpec, TimeoutMs},
     user::{PasswordHash, Session, User, Username},
 };
@@ -41,7 +42,7 @@ fn target(id: TargetId, now: Timestamp) -> Target {
         TimeoutMs::new(5000).unwrap(),
     )
     .unwrap();
-    Target::new(id, config, now)
+    Target::new(id, config, TargetOrganization::empty(), now)
 }
 
 #[sqlx::test(migrations = false)]
@@ -297,7 +298,15 @@ async fn alert_channels_rules_and_outbox_roundtrip(pool: PgPool) {
         .await
         .unwrap();
 
-    let rule = AlertRule::new(target.id(), AlertMode::All, 3, 1, 60, now).unwrap();
+    let rule = AlertRule::new(
+        AlertScope::Target(target.id()),
+        AlertMode::All,
+        3,
+        1,
+        60,
+        now,
+    )
+    .unwrap();
     let rule_id = AlertRepository::save_rule(
         &store,
         &AlertRuleRecord {
@@ -313,7 +322,7 @@ async fn alert_channels_rules_and_outbox_roundtrip(pool: PgPool) {
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].id, rule_id);
     assert_eq!(views[0].channels, vec![channel.id]);
-    assert_eq!(views[0].target_kind, "http");
+    assert_eq!(views[0].target_kind.as_deref(), Some("http"));
 
     let payload = json!({"event": "down", "target": {"name": target.name().as_str()}});
     store
@@ -321,7 +330,8 @@ async fn alert_channels_rules_and_outbox_roundtrip(pool: PgPool) {
             &views[0].state,
             &[OutboxDraft {
                 channel_id: channel.id,
-                target_id: target.id().as_uuid(),
+                target_id: Some(target.id().as_uuid()),
+                group_id: None,
                 dedupe_key: format!("{rule_id}:down:1"),
                 event: AlertEvent::Down,
                 payload: payload.clone(),
@@ -340,4 +350,173 @@ async fn alert_channels_rules_and_outbox_roundtrip(pool: PgPool) {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].status, "sent");
     assert!(!store.retry_event(events[0].id).await.unwrap());
+}
+
+#[sqlx::test(migrations = false)]
+async fn group_rule_expands_to_targets_without_their_own_rule(pool: PgPool) {
+    use pingushka_application::ports::TargetGroupRepository;
+    use pingushka_domain::organization::{TargetGroup, TargetGroupName, TargetTagSet};
+
+    let store = migrated_store(pool).await;
+    let now = time(1_700_000_000);
+    let group = TargetGroup::new(TargetGroupName::new("Neva").unwrap(), now);
+    TargetGroupRepository::save(&store, &group).await.unwrap();
+
+    let config = TargetConfig::new(
+        TargetName::new("api health").unwrap(),
+        TargetSpec::http(HttpUrl::parse("https://example.test/health").unwrap()),
+        CheckIntervalSecs::new(30).unwrap(),
+        TimeoutMs::new(5000).unwrap(),
+    )
+    .unwrap();
+    let target = Target::new(
+        TargetId::new(),
+        config,
+        TargetOrganization::new(Some(group.id()), TargetTagSet::empty()),
+        now,
+    );
+    TargetRepository::save(&store, &target).await.unwrap();
+    let agent = Agent::new(AgentId::new(), AgentName::new("edge-group").unwrap(), now);
+    AgentRepository::save(&store, &agent).await.unwrap();
+    store
+        .assign_agents(target.id(), &[agent.id()])
+        .await
+        .unwrap();
+    let result = CheckResult::new(
+        CheckResultId::new(),
+        target.id(),
+        agent.id(),
+        now,
+        CheckOutcome::new(
+            false,
+            LatencyMs::new(20),
+            None,
+            CheckMode::Http,
+            Some(CheckFailure::new(CheckFailureKind::Timeout, "timed out").unwrap()),
+        )
+        .unwrap(),
+    );
+    store.record_batch(&[result]).await.unwrap();
+
+    let group_rule =
+        AlertRule::new(AlertScope::Group(group.id()), AlertMode::All, 1, 1, 60, now).unwrap();
+    AlertRepository::save_rule(
+        &store,
+        &AlertRuleRecord {
+            id: Uuid::new_v4(),
+            rule: group_rule,
+        },
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let snapshots = AlertRepository::snapshots(&store).await.unwrap();
+    assert_eq!(snapshots.len(), 2);
+    let group_snapshot = snapshots
+        .iter()
+        .find(|snapshot| snapshot.subject_kind == "group")
+        .expect("group incident snapshot");
+    assert_eq!(group_snapshot.group_targets.len(), 1);
+    let template = snapshots
+        .iter()
+        .find(|snapshot| snapshot.subject_kind == "target")
+        .expect("group template snapshot");
+    assert_eq!(template.target_name.as_deref(), Some("api health"));
+    assert_eq!(template.target_kind.as_deref(), Some("http"));
+    assert!(template.target_ref.is_some());
+
+    let target_rule = AlertRule::new(
+        AlertScope::Target(target.id()),
+        AlertMode::All,
+        1,
+        1,
+        60,
+        now,
+    )
+    .unwrap();
+    AlertRepository::save_rule(
+        &store,
+        &AlertRuleRecord {
+            id: Uuid::new_v4(),
+            rule: target_rule,
+        },
+        &[],
+    )
+    .await
+    .unwrap();
+    let snapshots = AlertRepository::snapshots(&store).await.unwrap();
+    assert_eq!(snapshots.len(), 2);
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.subject_kind == "group" || snapshot.rule.target_id().is_some())
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn groups_tags_and_group_rules_roundtrip(pool: PgPool) {
+    use pingushka_application::ports::{DeleteGroupOutcome, TargetGroupRepository};
+    use pingushka_domain::organization::{TargetGroup, TargetGroupName, TargetTagSet};
+
+    let store = migrated_store(pool).await;
+    let now = time(1_700_000_000);
+    let group = TargetGroup::new(TargetGroupName::new("Neva").unwrap(), now);
+    TargetGroupRepository::save(&store, &group).await.unwrap();
+    assert_eq!(
+        TargetGroupRepository::find_by_name(&store, group.name())
+            .await
+            .unwrap(),
+        Some(group.clone())
+    );
+
+    let tags = TargetTagSet::parse(["Prod", "api"]).unwrap();
+    let organization = TargetOrganization::new(Some(group.id()), tags.clone());
+    let config = TargetConfig::new(
+        TargetName::new("api health").unwrap(),
+        TargetSpec::http(HttpUrl::parse("https://example.test/health").unwrap()),
+        CheckIntervalSecs::new(30).unwrap(),
+        TimeoutMs::new(5000).unwrap(),
+    )
+    .unwrap();
+    let target = Target::new(TargetId::new(), config, organization, now);
+    TargetRepository::save(&store, &target).await.unwrap();
+
+    let stored = TargetRepository::find(&store, target.id())
+        .await
+        .unwrap()
+        .expect("target exists");
+    assert_eq!(stored.group_id(), Some(group.id()));
+    assert_eq!(stored.tags(), tags.as_slice());
+
+    let counts = TargetGroupRepository::list_with_counts(&store)
+        .await
+        .unwrap();
+    assert_eq!(counts.len(), 1);
+    assert_eq!(counts[0].target_count(), 1);
+    assert_eq!(counts[0].rule_count(), 0);
+
+    let rule =
+        AlertRule::new(AlertScope::Group(group.id()), AlertMode::All, 3, 1, 60, now).unwrap();
+    AlertRepository::save_rule(
+        &store,
+        &AlertRuleRecord {
+            id: Uuid::new_v4(),
+            rule,
+        },
+        &[],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        TargetGroupRepository::delete(&store, group.id())
+            .await
+            .unwrap(),
+        DeleteGroupOutcome::HasRules
+    );
+    let counts = TargetGroupRepository::list_with_counts(&store)
+        .await
+        .unwrap();
+    assert_eq!(counts[0].rule_count(), 1);
 }

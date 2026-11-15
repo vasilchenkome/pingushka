@@ -9,7 +9,8 @@ use pingushka_domain::{
     check::{
         CheckFailure, CheckFailureKind, CheckMode, CheckOutcome, CheckResult, LatencyMs, StatusCode,
     },
-    identity::{AgentId, CheckResultId, TargetId, TokenDigest, UserId},
+    identity::{AgentId, CheckResultId, TargetGroupId, TargetId, TokenDigest, UserId},
+    organization::{TargetGroup, TargetGroupName, TargetOrganization, TargetTagSet},
     target::{
         CheckIntervalSecs, HttpMethod, HttpUrl, ProbeHost, Target, TargetConfig, TargetName,
         TargetSpec, TimeoutMs,
@@ -117,6 +118,7 @@ pub(crate) struct TargetRow {
     pub(crate) interval_secs: i32,
     pub(crate) timeout_ms: i32,
     pub(crate) enabled: bool,
+    pub(crate) group_id: Option<Uuid>,
     pub(crate) created_at: OffsetDateTime,
     pub(crate) updated_at: OffsetDateTime,
 }
@@ -125,24 +127,69 @@ impl TryFrom<TargetRow> for Target {
     type Error = PortError;
 
     fn try_from(row: TargetRow) -> Result<Self, Self::Error> {
-        if row.spec_json.0.kind() != row.kind {
+        row.with_tags(TargetTagSet::empty())
+    }
+}
+
+impl TargetRow {
+    pub(crate) fn with_tags(mut self, tags: TargetTagSet) -> Result<Target, PortError> {
+        let organization =
+            TargetOrganization::new(self.group_id.map(TargetGroupId::from_uuid), tags);
+        let id = TargetId::from_uuid(self.id);
+        let name =
+            TargetName::new(std::mem::take(&mut self.name)).map_err(|_| PortError::InvalidData)?;
+        if self.spec_json.0.kind() != self.kind {
             return Err(PortError::InvalidData);
         }
-        let id = TargetId::from_uuid(row.id);
-        let name = TargetName::new(row.name).map_err(|_| PortError::InvalidData)?;
-        let spec = row.spec_json.0.into_domain()?;
-        let interval = u32::try_from(row.interval_secs)
+        let spec = self.spec_json.0.into_domain()?;
+        let interval = u32::try_from(self.interval_secs)
             .ok()
             .and_then(|value| CheckIntervalSecs::new(value).ok())
             .ok_or(PortError::InvalidData)?;
-        let timeout = u32::try_from(row.timeout_ms)
+        let timeout = u32::try_from(self.timeout_ms)
             .ok()
             .and_then(|value| TimeoutMs::new(value).ok())
             .ok_or(PortError::InvalidData)?;
         let config =
             TargetConfig::new(name, spec, interval, timeout).map_err(|_| PortError::InvalidData)?;
-        Target::restore(id, config, row.enabled, row.created_at, row.updated_at)
-            .map_err(|_| PortError::InvalidData)
+        Target::restore(
+            id,
+            config,
+            organization,
+            self.enabled,
+            self.created_at,
+            self.updated_at,
+        )
+        .map_err(|_| PortError::InvalidData)
+    }
+}
+
+#[derive(FromRow)]
+pub(crate) struct TargetGroupRow {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) updated_at: OffsetDateTime,
+    pub(crate) target_count: i64,
+    pub(crate) rule_count: i64,
+}
+
+impl TryFrom<TargetGroupRow> for pingushka_domain::organization::TargetGroupWithCounts {
+    type Error = PortError;
+
+    fn try_from(row: TargetGroupRow) -> Result<Self, Self::Error> {
+        let group = TargetGroup::restore(
+            TargetGroupId::from_uuid(row.id),
+            TargetGroupName::new(row.name).map_err(|_| PortError::InvalidData)?,
+            row.created_at,
+            row.updated_at,
+        )
+        .map_err(|_| PortError::InvalidData)?;
+        Ok(Self::new(
+            group,
+            u32::try_from(row.target_count.max(0)).map_err(|_| PortError::InvalidData)?,
+            u32::try_from(row.rule_count.max(0)).map_err(|_| PortError::InvalidData)?,
+        ))
     }
 }
 
