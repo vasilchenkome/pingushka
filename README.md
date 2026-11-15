@@ -139,6 +139,7 @@ Agents connect outbound to the Hub over WebSocket, so they work behind NAT. Conf
 - Agent credentials are stored only on the agent, in a `0600` configuration file.
 - Rotating an agent credential closes its current WebSocket session.
 - The Hub is not published directly: Caddy terminates TLS and proxies to it.
+- CI ignores RUSTSEC-2026-0459 for `libsqlite3-sys`: it is pulled in by sqlx's optional SQLite dependency, which is not enabled; Pingushka uses PostgreSQL only.
 
 ## Configuration
 
