@@ -1,18 +1,28 @@
 import { useState, type FormEvent } from "react";
-import type { Agent, Target, TargetSpec } from "../types";
+import type { Agent, Target, TargetGroup, TargetSpec } from "../types";
 import { api, errorText } from "../api";
+import { TagInput } from "./TagInput";
 import { Dialog } from "./ui";
 
 interface TargetFormProps {
   target: Target | null;
   agents: Agent[];
+  groups: TargetGroup[];
+  tagSuggestions: string[];
   onClose: () => void;
   onSaved: (target: Target, created: boolean) => void;
 }
 
 type Kind = TargetSpec["kind"];
 
-export function TargetForm({ target, agents, onClose, onSaved }: TargetFormProps) {
+export function TargetForm({
+  target,
+  agents,
+  groups,
+  tagSuggestions,
+  onClose,
+  onSaved,
+}: TargetFormProps) {
   const initialKind: Kind = target?.spec.kind ?? "http";
   const [kind, setKind] = useState<Kind>(initialKind);
   const [name, setName] = useState(target?.name ?? "");
@@ -35,6 +45,8 @@ export function TargetForm({ target, agents, onClose, onSaved }: TargetFormProps
   const [timeout, setTimeout] = useState(String(target?.timeout_ms ?? 5000));
   const [enabled, setEnabled] = useState(target?.enabled ?? true);
   const [assigned, setAssigned] = useState<string[]>(target?.agent_ids ?? []);
+  const [groupId, setGroupId] = useState(target?.group?.id ?? "");
+  const [tags, setTags] = useState<string[]>(target?.tags ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +82,8 @@ export function TargetForm({ target, agents, onClose, onSaved }: TargetFormProps
       timeout_ms: Number(timeout),
       enabled,
       agent_ids: assigned,
+      group_id: groupId || null,
+      tags,
     };
 
     try {
@@ -212,6 +226,32 @@ export function TargetForm({ target, agents, onClose, onSaved }: TargetFormProps
           <p className="field-hint">От 100 до 30 000.</p>
         </div>
 
+        <div className="field">
+          <label htmlFor="target-group">Группа</label>
+          <select
+            id="target-group"
+            value={groupId}
+            onChange={(event) => setGroupId(event.target.value)}
+          >
+            <option value="">Без группы</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="target-tags">Теги</label>
+          <TagInput
+            id="target-tags"
+            value={tags}
+            onChange={setTags}
+            suggestions={tagSuggestions}
+          />
+        </div>
+
         <div className="field field--wide">
           <span className="label">Агенты</span>
           <div className="agent-choices">
@@ -219,22 +259,30 @@ export function TargetForm({ target, agents, onClose, onSaved }: TargetFormProps
               <p className="field-hint">Сначала создайте хотя бы одного агента.</p>
             ) : null}
             {agents.map((agent) => (
-              <label key={agent.id} className="choice">
+              <label
+                key={agent.id}
+                className={`agent-choice${assigned.includes(agent.id) ? " agent-choice--on" : ""}`}
+              >
                 <input
                   type="checkbox"
                   checked={assigned.includes(agent.id)}
                   onChange={() => toggleAgent(agent.id)}
                 />
-                <span>
-                  {agent.name}
-                  {!agent.connected ? <em>offline</em> : null}
+                <span className="agent-choice__body">
+                  <strong>{agent.name}</strong>
+                  <em className={agent.connected ? "state state--ok" : "state state--off"}>
+                    {agent.connected ? "online" : "offline"}
+                  </em>
                 </span>
               </label>
             ))}
           </div>
-          {agents.length > 0 && assigned.length === 0 ? (
-            <p className="field-hint">Без агентов цель не будет проверяться.</p>
-          ) : null}
+          <p className="field-hint">
+            Выбрано {assigned.length} из {agents.length}.
+            {agents.length > 0 && assigned.length === 0
+              ? " Без агентов цель не будет проверяться."
+              : ""}
+          </p>
         </div>
 
         <label className="choice choice--wide">

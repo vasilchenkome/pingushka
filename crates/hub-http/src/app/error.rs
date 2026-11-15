@@ -8,7 +8,7 @@ use pingushka_application::{
     error::PortError,
     use_cases::{
         EnrollAgentError, LoginError, RegisterAgentError, RotateAgentTokenError, SetupAdminError,
-        TargetUseCaseError,
+        TargetGroupUseCaseError, TargetUseCaseError,
     },
 };
 use serde_json::json;
@@ -123,8 +123,22 @@ impl ApiError {
             TargetUseCaseError::Disabled | TargetUseCaseError::TooSoon => {
                 Self::conflict(error.to_string())
             }
+            TargetUseCaseError::EmptySelection | TargetUseCaseError::TooManyTargets => {
+                Self::unprocessable(error.to_string())
+            }
             TargetUseCaseError::Invalid(_) => Self::unprocessable(error.to_string()),
             TargetUseCaseError::Repository(error) => Self::from_port(error),
+        }
+    }
+
+    pub fn from_target_group(error: TargetGroupUseCaseError) -> Self {
+        match error {
+            TargetGroupUseCaseError::NotFound => Self::not_found(error.to_string()),
+            TargetGroupUseCaseError::AlreadyExists | TargetGroupUseCaseError::HasRules => {
+                Self::conflict(error.to_string())
+            }
+            TargetGroupUseCaseError::Invalid(_) => Self::unprocessable(error.to_string()),
+            TargetGroupUseCaseError::Repository(error) => Self::from_port(error),
         }
     }
 }

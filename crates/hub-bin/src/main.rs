@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             agents: store.clone(),
             enrollments: store.clone(),
             targets: store.clone(),
+            groups: store.clone(),
             results: store.clone(),
             alerts: store.clone(),
             cipher: cipher.clone(),

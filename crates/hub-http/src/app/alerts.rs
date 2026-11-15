@@ -8,8 +8,8 @@ use axum::{
 use pingushka_application::alerts::{AlertChannel, AlertRuleRecord, ChannelKind, RuleView};
 use pingushka_domain::{
     Timestamp,
-    alert::{AlertChannelName, AlertMode, AlertRule},
-    identity::TargetId,
+    alert::{AlertChannelName, AlertMode, AlertRule, AlertScope},
+    identity::{TargetGroupId, TargetId},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -53,7 +53,10 @@ pub struct ChannelTestDto {
 
 #[derive(Deserialize)]
 pub struct RuleRequest {
-    target_id: Uuid,
+    #[serde(default)]
+    target_id: Option<Uuid>,
+    #[serde(default)]
+    group_id: Option<Uuid>,
     #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default = "default_mode")]
@@ -87,10 +90,13 @@ const fn default_cooldown() -> u32 {
 #[derive(Serialize)]
 pub struct RuleDto {
     id: Uuid,
-    target_id: Uuid,
-    target_name: String,
-    target_kind: String,
-    target_ref: String,
+    scope: &'static str,
+    target_id: Option<Uuid>,
+    group_id: Option<Uuid>,
+    target_name: Option<String>,
+    target_kind: Option<String>,
+    target_ref: Option<String>,
+    group_name: Option<String>,
     enabled: bool,
     mode: &'static str,
     failure_threshold: u16,
@@ -119,7 +125,8 @@ pub struct EventsQuery {
 pub struct EventDto {
     id: Uuid,
     event: &'static str,
-    target_name: String,
+    target_name: Option<String>,
+    group_name: Option<String>,
     channel_name: String,
     status: String,
     attempts: u16,
@@ -297,10 +304,32 @@ pub async fn upsert_rule(
     payload: Result<Json<RuleRequest>, JsonRejection>,
 ) -> Result<Json<RuleDto>, ApiError> {
     let Json(request) = payload?;
-    let target_id = TargetId::from_uuid(request.target_id);
-    let targets = state.targets.list().await.map_err(ApiError::from_port)?;
-    if !targets.iter().any(|target| target.id() == target_id) {
-        return Err(ApiError::not_found("target not found"));
+    let scope = match (request.target_id, request.group_id) {
+        (Some(target_id), None) => AlertScope::Target(TargetId::from_uuid(target_id)),
+        (None, Some(group_id)) => AlertScope::Group(TargetGroupId::from_uuid(group_id)),
+        _ => {
+            return Err(ApiError::unprocessable(
+                "exactly one of target_id or group_id is required",
+            ));
+        }
+    };
+    match scope {
+        AlertScope::Target(target_id) => {
+            let targets = state.targets.list().await.map_err(ApiError::from_port)?;
+            if !targets.iter().any(|target| target.id() == target_id) {
+                return Err(ApiError::not_found("target not found"));
+            }
+        }
+        AlertScope::Group(group_id) => {
+            let groups = state
+                .groups
+                .list_with_counts()
+                .await
+                .map_err(ApiError::from_port)?;
+            if !groups.iter().any(|group| group.group().id() == group_id) {
+                return Err(ApiError::not_found("group not found"));
+            }
+        }
     }
     let mode = AlertMode::try_from(request.mode.as_str())
         .map_err(|error| ApiError::unprocessable(error.to_string()))?;
@@ -310,12 +339,12 @@ pub async fn upsert_rule(
         .rule_views()
         .await
         .map_err(ApiError::from_port)?;
-    let existing = views.iter().find(|view| view.rule.target_id() == target_id);
+    let existing = views.iter().find(|view| view.rule.scope() == scope);
     let mut rule = if let Some(view) = existing {
         view.rule.clone()
     } else {
         AlertRule::new(
-            target_id,
+            scope,
             mode,
             request.failure_threshold,
             request.recovery_threshold,
@@ -389,6 +418,23 @@ pub async fn delete_rule(
     }
 }
 
+pub async fn delete_rule_by_id(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthSession,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    if state
+        .alerts
+        .delete_rule(id)
+        .await
+        .map_err(ApiError::from_port)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("rule not found"))
+    }
+}
+
 pub async fn list_events(
     State(state): State<Arc<AppState>>,
     _auth: AuthSession,
@@ -407,6 +453,7 @@ pub async fn list_events(
                 id: event.id,
                 event: event.event.as_str(),
                 target_name: event.target_name.clone(),
+                group_name: event.group_name.clone(),
                 channel_name: event.channel_name.clone(),
                 status: event.status.clone(),
                 attempts: event.attempts,
@@ -448,10 +495,13 @@ fn channel_dto(channel: &AlertChannel) -> ChannelDto {
 fn rule_dto(view: &RuleView) -> RuleDto {
     RuleDto {
         id: view.id,
-        target_id: view.rule.target_id().as_uuid(),
+        scope: view.rule.scope().kind(),
+        target_id: view.rule.target_id().map(|id| id.as_uuid()),
+        group_id: view.rule.group_id().map(|id| id.as_uuid()),
         target_name: view.target_name.clone(),
         target_kind: view.target_kind.clone(),
         target_ref: view.target_ref.clone(),
+        group_name: view.group_name.clone(),
         enabled: view.rule.is_enabled(),
         mode: view.rule.mode().as_str(),
         failure_threshold: view.rule.failure_threshold(),

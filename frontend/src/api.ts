@@ -7,11 +7,13 @@ import type {
   AlertRuleInput,
   ApiErrorBody,
   AuthState,
+  BulkTargetInput,
   CheckResult,
   Health,
   ProvisionResponse,
   Summary,
   Target,
+  TargetGroup,
   TargetSpec,
   User,
 } from "./types";
@@ -81,6 +83,18 @@ export const api = {
   deleteAgent: (id: string) => request<void>(`/api/agents/${id}`, { method: "DELETE" }),
 
   targets: () => request<Target[]>("/api/targets"),
+  targetGroups: () => request<TargetGroup[]>("/api/target-groups"),
+  createTargetGroup: (name: string) =>
+    request<TargetGroup>("/api/target-groups", { method: "POST", body: { name } }),
+  renameTargetGroup: (id: string, name: string) =>
+    request<TargetGroup>(`/api/target-groups/${id}`, { method: "PATCH", body: { name } }),
+  deleteTargetGroup: (id: string) =>
+    request<void>(`/api/target-groups/${id}`, { method: "DELETE" }),
+  bulkUpdateTargets: (payload: BulkTargetInput) =>
+    request<{ updated: number; group_id: string | null }>("/api/targets/bulk", {
+      method: "PATCH",
+      body: payload,
+    }),
   createTarget: (payload: {
     name: string;
     spec: TargetSpec;
@@ -88,6 +102,8 @@ export const api = {
     timeout_ms: number;
     enabled: boolean;
     agent_ids: string[];
+    group_id: string | null;
+    tags: string[];
   }) => request<Target>("/api/targets", { method: "POST", body: payload }),
   updateTarget: (
     id: string,
@@ -98,6 +114,8 @@ export const api = {
       timeout_ms: number;
       enabled: boolean;
       agent_ids: string[];
+      group_id: string | null;
+      tags: string[];
     }>,
   ) => request<Target>(`/api/targets/${id}`, { method: "PATCH", body: payload }),
   deleteTarget: (id: string) => request<void>(`/api/targets/${id}`, { method: "DELETE" }),
@@ -129,6 +147,8 @@ export const api = {
     request<AlertRule>("/api/alerts/rules", { method: "PUT", body: payload }),
   deleteAlertRule: (targetId: string) =>
     request<void>(`/api/alerts/rules/${targetId}`, { method: "DELETE" }),
+  deleteAlertRuleById: (id: string) =>
+    request<void>(`/api/alerts/rules/id/${id}`, { method: "DELETE" }),
   alertEvents: (limit = 100) =>
     request<AlertEvent[]>(`/api/alerts/events?limit=${limit}`),
   retryAlertEvent: (id: string) =>

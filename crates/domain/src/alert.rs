@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use time::OffsetDateTime;
 
-use crate::identity::TargetId;
+use crate::identity::{TargetGroupId, TargetId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AlertMode {
@@ -145,9 +145,45 @@ impl AlertChannelName {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AlertScope {
+    Target(TargetId),
+    Group(TargetGroupId),
+}
+
+impl AlertScope {
+    pub const fn target_id(self) -> Option<TargetId> {
+        match self {
+            Self::Target(id) => Some(id),
+            Self::Group(_) => None,
+        }
+    }
+
+    pub const fn group_id(self) -> Option<TargetGroupId> {
+        match self {
+            Self::Target(_) => None,
+            Self::Group(id) => Some(id),
+        }
+    }
+
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Target(_) => "target",
+            Self::Group(_) => "group",
+        }
+    }
+
+    pub const fn subject_id(self) -> uuid::Uuid {
+        match self {
+            Self::Target(id) => id.as_uuid(),
+            Self::Group(id) => id.as_uuid(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AlertRule {
-    target_id: TargetId,
+    scope: AlertScope,
     enabled: bool,
     mode: AlertMode,
     failure_threshold: u16,
@@ -159,7 +195,7 @@ pub struct AlertRule {
 
 impl AlertRule {
     pub fn new(
-        target_id: TargetId,
+        scope: AlertScope,
         mode: AlertMode,
         failure_threshold: u16,
         recovery_threshold: u16,
@@ -170,7 +206,7 @@ impl AlertRule {
         validate_recovery_threshold(recovery_threshold)?;
         validate_cooldown(cooldown_secs)?;
         Ok(Self {
-            target_id,
+            scope,
             enabled: true,
             mode,
             failure_threshold,
@@ -183,7 +219,7 @@ impl AlertRule {
 
     #[allow(clippy::too_many_arguments)]
     pub fn restore(
-        target_id: TargetId,
+        scope: AlertScope,
         enabled: bool,
         mode: AlertMode,
         failure_threshold: u16,
@@ -199,7 +235,7 @@ impl AlertRule {
         validate_recovery_threshold(recovery_threshold)?;
         validate_cooldown(cooldown_secs)?;
         Ok(Self {
-            target_id,
+            scope,
             enabled,
             mode,
             failure_threshold,
@@ -234,8 +270,16 @@ impl AlertRule {
         Ok(())
     }
 
-    pub fn target_id(&self) -> TargetId {
-        self.target_id
+    pub const fn scope(&self) -> AlertScope {
+        self.scope
+    }
+
+    pub const fn target_id(&self) -> Option<TargetId> {
+        self.scope.target_id()
+    }
+
+    pub const fn group_id(&self) -> Option<TargetGroupId> {
+        self.scope.group_id()
     }
 
     pub const fn is_enabled(&self) -> bool {

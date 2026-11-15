@@ -62,6 +62,8 @@ pub struct AlertRuleRecord {
 #[derive(Clone, Debug)]
 pub struct AlertState {
     pub rule_id: Uuid,
+    pub subject_kind: &'static str,
+    pub subject_id: Uuid,
     pub status: AlertStatus,
     pub failures: u16,
     pub successes: u16,
@@ -72,9 +74,16 @@ pub struct AlertState {
 }
 
 impl AlertState {
-    pub fn initial(rule_id: Uuid, now: Timestamp) -> Self {
+    pub fn initial(
+        rule_id: Uuid,
+        subject_kind: &'static str,
+        subject_id: Uuid,
+        now: Timestamp,
+    ) -> Self {
         Self {
             rule_id,
+            subject_kind,
+            subject_id,
             status: AlertStatus::Ok,
             failures: 0,
             successes: 0,
@@ -100,9 +109,18 @@ pub struct RuleView {
     pub rule: AlertRule,
     pub state: AlertState,
     pub channels: Vec<Uuid>,
-    pub target_name: String,
-    pub target_kind: String,
-    pub target_ref: String,
+    pub target_name: Option<String>,
+    pub target_kind: Option<String>,
+    pub target_ref: Option<String>,
+    pub group_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GroupTargetResult {
+    pub id: Uuid,
+    pub name: String,
+    pub ok: bool,
+    pub checked_at: Timestamp,
 }
 
 #[derive(Clone, Debug)]
@@ -112,16 +130,20 @@ pub struct RuleSnapshot {
     pub state: AlertState,
     pub channels: Vec<Uuid>,
     pub interval_secs: u32,
-    pub target_name: String,
-    pub target_kind: String,
-    pub target_ref: String,
+    pub subject_kind: &'static str,
+    pub target_name: Option<String>,
+    pub target_kind: Option<String>,
+    pub target_ref: Option<String>,
+    pub group_name: Option<String>,
+    pub group_targets: Vec<GroupTargetResult>,
     pub agents: Vec<AgentResult>,
 }
 
 #[derive(Clone, Debug)]
 pub struct OutboxDraft {
     pub channel_id: Uuid,
-    pub target_id: Uuid,
+    pub target_id: Option<Uuid>,
+    pub group_id: Option<Uuid>,
     pub dedupe_key: String,
     pub event: AlertEvent,
     pub payload: Value,
@@ -143,7 +165,8 @@ pub struct OutboxItem {
 pub struct OutboxEvent {
     pub id: Uuid,
     pub event: AlertEvent,
-    pub target_name: String,
+    pub target_name: Option<String>,
+    pub group_name: Option<String>,
     pub channel_name: String,
     pub status: String,
     pub attempts: u16,
@@ -165,6 +188,7 @@ pub trait AlertRepository: Send + Sync {
         channel_ids: &[Uuid],
     ) -> Result<Uuid, PortError>;
     async fn delete_rule_for_target(&self, target_id: TargetId) -> Result<bool, PortError>;
+    async fn delete_rule(&self, id: Uuid) -> Result<bool, PortError>;
     async fn snapshots(&self) -> Result<Vec<RuleSnapshot>, PortError>;
     async fn apply_transition(
         &self,
@@ -256,19 +280,49 @@ impl EvaluateAlerts {
             let fresh_after = now
                 - Duration::seconds(i64::from(snapshot.interval_secs.max(5)) * 2)
                     .max(Duration::seconds(120));
-            let fresh: Vec<&AgentResult> = snapshot
-                .agents
-                .iter()
-                .filter(|agent| agent.checked_at >= fresh_after)
-                .collect();
-            if fresh.is_empty() {
-                continue;
-            }
-            let newest = fresh
-                .iter()
-                .map(|agent| agent.checked_at)
-                .max()
-                .unwrap_or(now);
+            let (fresh, failed, newest) = match snapshot.subject_kind {
+                "group" => {
+                    let fresh: Vec<&GroupTargetResult> = snapshot
+                        .group_targets
+                        .iter()
+                        .filter(|target| target.checked_at >= fresh_after)
+                        .collect();
+                    if fresh.is_empty() {
+                        continue;
+                    }
+                    let newest = fresh
+                        .iter()
+                        .map(|target| target.checked_at)
+                        .max()
+                        .unwrap_or(now);
+                    let failed = match snapshot.rule.mode() {
+                        AlertMode::All => fresh.iter().all(|target| !target.ok),
+                        AlertMode::Any => fresh.iter().any(|target| !target.ok),
+                    };
+                    (fresh.len(), failed, newest)
+                }
+                _ => {
+                    let fresh: Vec<&AgentResult> = snapshot
+                        .agents
+                        .iter()
+                        .filter(|agent| agent.checked_at >= fresh_after)
+                        .collect();
+                    if fresh.is_empty() {
+                        continue;
+                    }
+                    let newest = fresh
+                        .iter()
+                        .map(|agent| agent.checked_at)
+                        .max()
+                        .unwrap_or(now);
+                    let failed = match snapshot.rule.mode() {
+                        AlertMode::All => fresh.iter().all(|agent| !agent.ok),
+                        AlertMode::Any => fresh.iter().any(|agent| !agent.ok),
+                    };
+                    (fresh.len(), failed, newest)
+                }
+            };
+            let _ = fresh;
             if newest
                 <= snapshot
                     .state
@@ -278,10 +332,6 @@ impl EvaluateAlerts {
             {
                 continue;
             }
-            let failed = match snapshot.rule.mode() {
-                AlertMode::All => fresh.iter().all(|agent| !agent.ok),
-                AlertMode::Any => fresh.iter().any(|agent| !agent.ok),
-            };
             let cooldown = Duration::seconds(i64::from(snapshot.rule.cooldown_secs()));
             let cooldown_ok = snapshot
                 .state
@@ -335,10 +385,34 @@ impl EvaluateAlerts {
 }
 
 fn payload(snapshot: &RuleSnapshot, event: AlertEvent, failures: u16, since: Timestamp) -> Value {
+    if snapshot.subject_kind == "group" {
+        let failed: Vec<&GroupTargetResult> = snapshot
+            .group_targets
+            .iter()
+            .filter(|target| !target.ok)
+            .collect();
+        return json!({
+            "event": event.as_str(),
+            "scope": "group",
+            "group": {
+                "id": snapshot.rule.group_id().map(|id| id.as_uuid()),
+                "name": snapshot.group_name,
+                "targets_total": snapshot.group_targets.len(),
+                "targets_failed": failed.len(),
+            },
+            "targets": snapshot.group_targets.iter().map(|target| json!({
+                "id": target.id,
+                "name": target.name,
+            })).collect::<Vec<_>>(),
+            "failures": failures,
+            "since": since.format(&Rfc3339).unwrap_or_default(),
+        });
+    }
     json!({
         "event": event.as_str(),
+        "scope": "target",
         "target": {
-            "id": snapshot.rule.target_id().as_uuid(),
+            "id": snapshot.rule.target_id().map(|id| id.as_uuid()),
             "name": snapshot.target_name,
             "kind": snapshot.target_kind,
             "ref": snapshot.target_ref,
@@ -364,11 +438,14 @@ fn drafts_for(
         .iter()
         .map(|channel_id| OutboxDraft {
             channel_id: *channel_id,
-            target_id: snapshot.rule.target_id().as_uuid(),
+            target_id: snapshot.rule.target_id().map(|id| id.as_uuid()),
+            group_id: snapshot.rule.group_id().map(|id| id.as_uuid()),
             dedupe_key: format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}-{}",
                 snapshot.rule_id,
                 channel_id,
+                snapshot.subject_kind,
+                snapshot.state.subject_id,
                 event.as_str(),
                 opened.unix_timestamp()
             ),
@@ -465,7 +542,8 @@ mod tests {
 
     use super::*;
     use crate::ports::Clock;
-    use pingushka_domain::identity::TargetId;
+    use pingushka_domain::alert::AlertScope;
+    use pingushka_domain::identity::{TargetGroupId, TargetId};
 
     struct FixedClock(Timestamp);
 
@@ -512,6 +590,10 @@ mod tests {
         }
 
         async fn delete_rule_for_target(&self, _target_id: TargetId) -> Result<bool, PortError> {
+            unimplemented!()
+        }
+
+        async fn delete_rule(&self, _id: Uuid) -> Result<bool, PortError> {
             unimplemented!()
         }
 
@@ -569,16 +651,27 @@ mod tests {
     }
 
     fn snapshot(now: Timestamp, state: AlertState, ok: bool) -> RuleSnapshot {
-        let rule = AlertRule::new(TargetId::new(), AlertMode::All, 3, 1, 900, now).unwrap();
+        let rule = AlertRule::new(
+            pingushka_domain::alert::AlertScope::Target(TargetId::new()),
+            AlertMode::All,
+            3,
+            1,
+            900,
+            now,
+        )
+        .unwrap();
         RuleSnapshot {
             rule_id: state.rule_id,
             rule,
             state,
             channels: vec![Uuid::new_v4()],
             interval_secs: 30,
-            target_name: "example".to_owned(),
-            target_kind: "http".to_owned(),
-            target_ref: "https://example.test".to_owned(),
+            subject_kind: "target",
+            target_name: Some("example".to_owned()),
+            target_kind: Some("http".to_owned()),
+            target_ref: Some("https://example.test".to_owned()),
+            group_name: None,
+            group_targets: Vec::new(),
             agents: vec![AgentResult {
                 agent_id: Uuid::new_v4(),
                 name: "edge".to_owned(),
@@ -592,7 +685,12 @@ mod tests {
     async fn third_failure_opens_one_incident_and_recovery_closes_it() {
         let now = Timestamp::from_unix_timestamp(1_700_000_000).unwrap();
         let rule_id = Uuid::new_v4();
-        let mut state = AlertState::initial(rule_id, now - Duration::seconds(60));
+        let mut state = AlertState::initial(
+            rule_id,
+            "target",
+            TargetId::new().as_uuid(),
+            now - Duration::seconds(60),
+        );
         state.failures = 2;
         let repo = Arc::new(FakeRepository {
             snapshots: Mutex::new(vec![snapshot(now, state, false)]),
@@ -626,7 +724,12 @@ mod tests {
     async fn cooldown_holds_second_incident_in_pending() {
         let now = Timestamp::from_unix_timestamp(1_700_000_000).unwrap();
         let rule_id = Uuid::new_v4();
-        let mut state = AlertState::initial(rule_id, now - Duration::seconds(60));
+        let mut state = AlertState::initial(
+            rule_id,
+            "target",
+            TargetId::new().as_uuid(),
+            now - Duration::seconds(60),
+        );
         state.failures = 2;
         state.last_notified_at = Some(now - Duration::seconds(10));
         let repo = Arc::new(FakeRepository {
@@ -641,5 +744,90 @@ mod tests {
         let (next, drafts) = repo.applied.lock().unwrap().clone().unwrap();
         assert_eq!(next.status, AlertStatus::Pending);
         assert!(drafts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn group_rule_uses_all_or_any_across_fresh_target_results() {
+        let now = Timestamp::from_unix_timestamp(1_700_000_000).unwrap();
+        let group_id = TargetGroupId::new();
+        let state = AlertState::initial(
+            Uuid::new_v4(),
+            "group",
+            group_id.as_uuid(),
+            now - Duration::seconds(60),
+        );
+        let targets = vec![
+            GroupTargetResult {
+                id: Uuid::new_v4(),
+                name: "api".to_owned(),
+                ok: false,
+                checked_at: now,
+            },
+            GroupTargetResult {
+                id: Uuid::new_v4(),
+                name: "web".to_owned(),
+                ok: false,
+                checked_at: now,
+            },
+        ];
+        let make_snapshot = |mode: AlertMode, targets: Vec<GroupTargetResult>| RuleSnapshot {
+            rule_id: state.rule_id,
+            rule: AlertRule::new(
+                AlertScope::Group(group_id),
+                mode,
+                1,
+                1,
+                60,
+                now - Duration::seconds(60),
+            )
+            .unwrap(),
+            state: state.clone(),
+            channels: vec![Uuid::new_v4()],
+            interval_secs: 30,
+            subject_kind: "group",
+            target_name: None,
+            target_kind: None,
+            target_ref: None,
+            group_name: Some("Neva".to_owned()),
+            group_targets: targets,
+            agents: Vec::new(),
+        };
+
+        let repo = Arc::new(FakeRepository {
+            snapshots: Mutex::new(vec![make_snapshot(AlertMode::All, targets.clone())]),
+            applied: Mutex::new(None),
+        });
+        let report = EvaluateAlerts::new(repo.clone(), Arc::new(FixedClock(now)))
+            .execute()
+            .await
+            .unwrap();
+        assert_eq!(report.events, 1);
+        let (next, drafts) = repo.applied.lock().unwrap().clone().unwrap();
+        assert_eq!(next.status, AlertStatus::Firing);
+        assert_eq!(drafts[0].event, AlertEvent::Down);
+        assert_eq!(drafts[0].payload["scope"], "group");
+        assert_eq!(drafts[0].payload["group"]["targets_failed"], 2);
+
+        let mut one_ok = targets;
+        one_ok[1].ok = true;
+        let repo = Arc::new(FakeRepository {
+            snapshots: Mutex::new(vec![make_snapshot(AlertMode::All, one_ok.clone())]),
+            applied: Mutex::new(None),
+        });
+        let report = EvaluateAlerts::new(repo, Arc::new(FixedClock(now)))
+            .execute()
+            .await
+            .unwrap();
+        assert_eq!(report.events, 0);
+
+        let repo = Arc::new(FakeRepository {
+            snapshots: Mutex::new(vec![make_snapshot(AlertMode::Any, one_ok)]),
+            applied: Mutex::new(None),
+        });
+        let report = EvaluateAlerts::new(repo, Arc::new(FixedClock(now)))
+            .execute()
+            .await
+            .unwrap();
+        assert_eq!(report.events, 1);
     }
 }

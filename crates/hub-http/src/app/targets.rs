@@ -10,9 +10,11 @@ use axum::{
     response::IntoResponse,
 };
 use pingushka_application::queries::{HistoryFilter, SummaryFilter};
+use pingushka_application::use_cases::{GroupChange, TagChange};
 use pingushka_domain::{
     check::{CheckResult, StatusCode as HttpStatus},
-    identity::{AgentId, TargetId},
+    identity::{AgentId, TargetGroupId, TargetId},
+    organization::{TargetOrganization, TargetTagSet},
     target::{
         CheckIntervalSecs, HttpMethod, HttpUrl, ProbeHost, Target, TargetConfig, TargetName,
         TargetSpec, TimeoutMs,
@@ -52,6 +54,10 @@ pub struct CreateTargetRequest {
     enabled: bool,
     #[serde(default)]
     agent_ids: Vec<Uuid>,
+    #[serde(default)]
+    group_id: Option<Uuid>,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +68,10 @@ pub struct UpdateTargetRequest {
     timeout_ms: Option<u32>,
     enabled: Option<bool>,
     agent_ids: Option<Vec<Uuid>>,
+    #[serde(default)]
+    group_id: Option<Option<Uuid>>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 const fn default_enabled() -> bool {
@@ -77,8 +87,16 @@ pub struct TargetDto {
     timeout_ms: u32,
     enabled: bool,
     agent_ids: Vec<Uuid>,
+    group: Option<TargetGroupRefDto>,
+    tags: Vec<String>,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Serialize)]
+pub struct TargetGroupRefDto {
+    id: Uuid,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -144,6 +162,51 @@ pub struct TriggerResponse {
     triggered: usize,
 }
 
+#[derive(Deserialize)]
+pub struct BulkUpdateRequest {
+    target_ids: Vec<Uuid>,
+    #[serde(default)]
+    group: BulkGroupRequest,
+    #[serde(default)]
+    tags: BulkTagRequest,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum BulkGroupRequest {
+    #[default]
+    Keep,
+    Clear,
+    Set {
+        group_id: Uuid,
+    },
+    Create {
+        name: String,
+    },
+}
+
+#[derive(Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum BulkTagRequest {
+    #[default]
+    Keep,
+    Add {
+        values: Vec<String>,
+    },
+    Remove {
+        values: Vec<String>,
+    },
+    Replace {
+        values: Vec<String>,
+    },
+}
+
+#[derive(Serialize)]
+pub struct BulkUpdateResponse {
+    updated: usize,
+    group_id: Option<Uuid>,
+}
+
 pub async fn list(
     State(state): State<Arc<AppState>>,
     _auth: AuthSession,
@@ -153,10 +216,24 @@ pub async fn list(
         .list_with_agents()
         .await
         .map_err(ApiError::from_port)?;
+    let groups = state
+        .groups
+        .list_with_counts()
+        .await
+        .map_err(ApiError::from_port)?;
+    let names: std::collections::HashMap<Uuid, String> = groups
+        .iter()
+        .map(|group| {
+            (
+                group.group().id().as_uuid(),
+                group.group().name().as_str().to_owned(),
+            )
+        })
+        .collect();
     Ok(Json(
         targets
             .iter()
-            .map(|entry| target_dto(entry.target(), entry.agent_ids()))
+            .map(|entry| target_dto(entry.target(), entry.agent_ids(), &names))
             .collect(),
     ))
 }
@@ -173,6 +250,8 @@ pub async fn create(
         request.interval_secs,
         request.timeout_ms,
     )?;
+    let organization = organization_from(request.group_id, request.tags)?;
+    ensure_group(&state, organization.group_id()).await?;
     let agent_ids: Vec<AgentId> = request
         .agent_ids
         .into_iter()
@@ -180,12 +259,13 @@ pub async fn create(
         .collect();
     let target = state
         .create_target
-        .execute(config, request.enabled, agent_ids.clone())
+        .execute(config, organization, request.enabled, agent_ids.clone())
         .await
         .map_err(ApiError::from_target)?;
+    let names = group_names(&state, target.group_id()).await?;
     Ok((
         StatusCode::CREATED,
-        Json(target_dto(&target, &unique(agent_ids))),
+        Json(target_dto(&target, &unique(agent_ids), &names)),
     ))
 }
 
@@ -210,6 +290,17 @@ pub async fn update(
     let interval_secs = request.interval_secs.unwrap_or(current.interval().get());
     let timeout_ms = request.timeout_ms.unwrap_or(current.timeout().get());
     let enabled = request.enabled.unwrap_or(current.is_enabled());
+    let group_id = match request.group_id {
+        Some(value) => value.map(TargetGroupId::from_uuid),
+        None => current.group_id(),
+    };
+    let tags = match request.tags {
+        Some(values) => TargetTagSet::parse(values)
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?,
+        None => current.tag_set().clone(),
+    };
+    let organization = TargetOrganization::new(group_id, tags);
+    ensure_group(&state, organization.group_id()).await?;
     let agent_ids = match request.agent_ids {
         Some(agent_ids) => agent_ids.into_iter().map(AgentId::from_uuid).collect(),
         None => state
@@ -221,10 +312,63 @@ pub async fn update(
     let config = config_from(name, spec, interval_secs, timeout_ms)?;
     let target = state
         .update_target
-        .execute(target_id, config, enabled, agent_ids.clone())
+        .execute(target_id, config, organization, enabled, agent_ids.clone())
         .await
         .map_err(ApiError::from_target)?;
-    Ok(Json(target_dto(&target, &unique(agent_ids))))
+    let names = group_names(&state, target.group_id()).await?;
+    Ok(Json(target_dto(&target, &unique(agent_ids), &names)))
+}
+
+pub async fn bulk_update(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthSession,
+    payload: Result<Json<BulkUpdateRequest>, JsonRejection>,
+) -> Result<Json<BulkUpdateResponse>, ApiError> {
+    let Json(request) = payload?;
+    let target_ids: Vec<TargetId> = request
+        .target_ids
+        .into_iter()
+        .map(TargetId::from_uuid)
+        .collect();
+    let group_change = match request.group {
+        BulkGroupRequest::Keep => GroupChange::Keep,
+        BulkGroupRequest::Clear => GroupChange::Clear,
+        BulkGroupRequest::Set { group_id } => {
+            let group_id = TargetGroupId::from_uuid(group_id);
+            if state
+                .groups
+                .find(group_id)
+                .await
+                .map_err(ApiError::from_port)?
+                .is_none()
+            {
+                return Err(ApiError::not_found("target group not found"));
+            }
+            GroupChange::Set(group_id)
+        }
+        BulkGroupRequest::Create { name } => GroupChange::CreateAndSet(
+            pingushka_domain::organization::TargetGroupName::new(&name)
+                .map_err(|error| ApiError::unprocessable(error.to_string()))?,
+        ),
+    };
+    let tag_values = |values: Vec<String>| {
+        TargetTagSet::parse(values).map_err(|error| ApiError::unprocessable(error.to_string()))
+    };
+    let tag_change = match request.tags {
+        BulkTagRequest::Keep => TagChange::Keep,
+        BulkTagRequest::Add { values } => TagChange::Add(tag_values(values)?),
+        BulkTagRequest::Remove { values } => TagChange::Remove(tag_values(values)?),
+        BulkTagRequest::Replace { values } => TagChange::Replace(tag_values(values)?),
+    };
+    let result = state
+        .bulk_update
+        .execute(&target_ids, group_change, tag_change)
+        .await
+        .map_err(ApiError::from_target)?;
+    Ok(Json(BulkUpdateResponse {
+        updated: result.updated,
+        group_id: result.group_id.map(|id| id.as_uuid()),
+    }))
 }
 
 pub async fn delete_one(
@@ -435,7 +579,19 @@ fn spec_dto(spec: &TargetSpec) -> SpecDto {
     }
 }
 
-fn target_dto(target: &Target, agent_ids: &[AgentId]) -> TargetDto {
+fn target_dto(
+    target: &Target,
+    agent_ids: &[AgentId],
+    groups: &std::collections::HashMap<Uuid, String>,
+) -> TargetDto {
+    let group = target.group_id().and_then(|group_id| {
+        groups
+            .get(&group_id.as_uuid())
+            .map(|name| TargetGroupRefDto {
+                id: group_id.as_uuid(),
+                name: name.clone(),
+            })
+    });
     TargetDto {
         id: target.id().as_uuid(),
         name: target.name().as_str().to_owned(),
@@ -444,9 +600,58 @@ fn target_dto(target: &Target, agent_ids: &[AgentId]) -> TargetDto {
         timeout_ms: target.timeout().get(),
         enabled: target.is_enabled(),
         agent_ids: agent_ids.iter().map(|id| id.as_uuid()).collect(),
+        group,
+        tags: target
+            .tags()
+            .iter()
+            .map(|tag| tag.as_str().to_owned())
+            .collect(),
         created_at: crate::system::rfc3339(target.created_at()),
         updated_at: crate::system::rfc3339(target.updated_at()),
     }
+}
+
+fn organization_from(
+    group_id: Option<Uuid>,
+    tags: Vec<String>,
+) -> Result<TargetOrganization, ApiError> {
+    let tags =
+        TargetTagSet::parse(tags).map_err(|error| ApiError::unprocessable(error.to_string()))?;
+    Ok(TargetOrganization::new(
+        group_id.map(TargetGroupId::from_uuid),
+        tags,
+    ))
+}
+
+async fn ensure_group(state: &AppState, group_id: Option<TargetGroupId>) -> Result<(), ApiError> {
+    if let Some(group_id) = group_id
+        && state
+            .groups
+            .find(group_id)
+            .await
+            .map_err(ApiError::from_port)?
+            .is_none()
+    {
+        return Err(ApiError::not_found("target group not found"));
+    }
+    Ok(())
+}
+
+async fn group_names(
+    state: &AppState,
+    group_id: Option<TargetGroupId>,
+) -> Result<std::collections::HashMap<Uuid, String>, ApiError> {
+    let mut names = std::collections::HashMap::new();
+    if let Some(group_id) = group_id
+        && let Some(group) = state
+            .groups
+            .find(group_id)
+            .await
+            .map_err(ApiError::from_port)?
+    {
+        names.insert(group.id().as_uuid(), group.name().as_str().to_owned());
+    }
+    Ok(names)
 }
 
 fn result_dto(result: &CheckResult) -> ResultDto {

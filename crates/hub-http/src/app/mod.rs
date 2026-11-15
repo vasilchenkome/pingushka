@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod alerts;
 pub mod error;
+pub mod groups;
 pub mod health;
 pub mod session;
 pub mod targets;
@@ -21,13 +22,14 @@ use pingushka_application::{
     alerts::{AlertRepository, NotificationSender, SecretCipher},
     ports::{
         AgentControlGateway, AgentEnrollmentRepository, AgentRepository, CheckResultRepository,
-        Clock, HealthCheck, PasswordHasher, SessionRepository, TargetRepository, TokenDigester,
-        TokenGenerator, UserRepository,
+        Clock, HealthCheck, PasswordHasher, SessionRepository, TargetGroupRepository,
+        TargetRepository, TokenDigester, TokenGenerator, UserRepository,
     },
     use_cases::{
-        AuthenticateSession, CreateTarget, DeleteTarget, EnrollAgent, Login, Logout, PruneOldData,
-        RecordCheckBatch, RegisterAgent, RotateAgentToken, SetupAdmin, TriggerManualCheck,
-        UpdateTarget,
+        AuthenticateSession, BulkUpdateTargets, CreateTarget, CreateTargetGroup, DeleteTarget,
+        DeleteTargetGroup, EnrollAgent, ListTargetGroups, Login, Logout, PruneOldData,
+        RecordCheckBatch, RegisterAgent, RenameTargetGroup, RotateAgentToken, SetupAdmin,
+        TriggerManualCheck, UpdateTarget,
     },
 };
 use tower::ServiceBuilder;
@@ -83,6 +85,7 @@ pub struct HubPorts {
     pub agents: Arc<dyn AgentRepository>,
     pub enrollments: Arc<dyn AgentEnrollmentRepository>,
     pub targets: Arc<dyn TargetRepository>,
+    pub groups: Arc<dyn TargetGroupRepository>,
     pub results: Arc<dyn CheckResultRepository>,
     pub alerts: Arc<dyn AlertRepository>,
     pub cipher: Arc<dyn SecretCipher>,
@@ -104,6 +107,11 @@ pub struct AppState {
     pub enroll_agent: Arc<EnrollAgent>,
     pub create_target: Arc<CreateTarget>,
     pub update_target: Arc<UpdateTarget>,
+    pub bulk_update: Arc<BulkUpdateTargets>,
+    pub create_group: Arc<CreateTargetGroup>,
+    pub rename_group: Arc<RenameTargetGroup>,
+    pub delete_group: Arc<DeleteTargetGroup>,
+    pub list_groups: Arc<ListTargetGroups>,
     pub delete_target: Arc<DeleteTarget>,
     pub manual_check: Arc<TriggerManualCheck>,
     pub record_batch: Arc<RecordCheckBatch>,
@@ -111,6 +119,7 @@ pub struct AppState {
     pub users: Arc<dyn UserRepository>,
     pub agents: Arc<dyn AgentRepository>,
     pub targets: Arc<dyn TargetRepository>,
+    pub groups: Arc<dyn TargetGroupRepository>,
     pub results: Arc<dyn CheckResultRepository>,
     pub alerts: Arc<dyn AlertRepository>,
     pub cipher: Arc<dyn SecretCipher>,
@@ -183,6 +192,21 @@ impl AppState {
             control.clone(),
             ports.clock.clone(),
         ));
+        let bulk_update = Arc::new(BulkUpdateTargets::new(
+            ports.targets.clone(),
+            ports.groups.clone(),
+            ports.clock.clone(),
+        ));
+        let create_group = Arc::new(CreateTargetGroup::new(
+            ports.groups.clone(),
+            ports.clock.clone(),
+        ));
+        let rename_group = Arc::new(RenameTargetGroup::new(
+            ports.groups.clone(),
+            ports.clock.clone(),
+        ));
+        let delete_group = Arc::new(DeleteTargetGroup::new(ports.groups.clone()));
+        let list_groups = Arc::new(ListTargetGroups::new(ports.groups.clone()));
         let delete_target = Arc::new(DeleteTarget::new(ports.targets.clone(), control.clone()));
         let manual_check = Arc::new(TriggerManualCheck::new(
             ports.targets.clone(),
@@ -209,6 +233,11 @@ impl AppState {
             enroll_agent,
             create_target,
             update_target,
+            bulk_update,
+            create_group,
+            rename_group,
+            delete_group,
+            list_groups,
             delete_target,
             manual_check,
             record_batch,
@@ -216,6 +245,7 @@ impl AppState {
             users: ports.users,
             agents: ports.agents,
             targets: ports.targets,
+            groups: ports.groups,
             results: ports.results,
             alerts: ports.alerts,
             cipher: ports.cipher,
@@ -252,6 +282,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/agent/enroll", post(agents::enroll))
         .route("/api/agent/ws", get(ws::upgrade))
         .route("/api/targets", get(targets::list).post(targets::create))
+        .route("/api/targets/bulk", patch(targets::bulk_update))
         .route(
             "/api/targets/{id}",
             patch(targets::update).delete(targets::delete_one),
@@ -259,6 +290,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/targets/{id}/check", post(targets::check_now))
         .route("/api/targets/{id}/results", get(targets::history))
         .route("/api/summary", get(targets::summary))
+        .route("/api/target-groups", get(groups::list).post(groups::create))
+        .route(
+            "/api/target-groups/{id}",
+            patch(groups::rename).delete(groups::delete_one),
+        )
         .route(
             "/api/alerts/channels",
             get(alerts::list_channels).post(alerts::create_channel),
@@ -273,6 +309,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(alerts::list_rules).put(alerts::upsert_rule),
         )
         .route("/api/alerts/rules/{target_id}", delete(alerts::delete_rule))
+        .route(
+            "/api/alerts/rules/id/{id}",
+            delete(alerts::delete_rule_by_id),
+        )
         .route("/api/alerts/events", get(alerts::list_events))
         .route("/api/alerts/events/{id}/retry", post(alerts::retry_event))
         .route("/api/{*rest}", any(not_found));

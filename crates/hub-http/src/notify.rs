@@ -30,7 +30,7 @@ impl Notifier {
     async fn telegram(&self, config: &Value, payload: &Value) -> Result<(), String> {
         let token = required(config, "bot_token")?;
         let chat_id = required(config, "chat_id")?;
-        let text = message_text(payload);
+        let text = telegram_text(payload);
         let response = self
             .client
             .post(format!(
@@ -40,6 +40,7 @@ impl Notifier {
             .json(&serde_json::json!({
                 "chat_id": chat_id,
                 "text": text,
+                "parse_mode": "HTML",
                 "disable_web_page_preview": true,
             }))
             .send()
@@ -155,16 +156,99 @@ fn message_subject(payload: &Value) -> String {
         .get("event")
         .and_then(Value::as_str)
         .unwrap_or("down");
-    let name = payload
-        .get("target")
-        .and_then(|target| target.get("name"))
+    let group = payload.get("group").and_then(|group| group.get("name"));
+    let target = payload.get("target").and_then(|target| target.get("name"));
+    let name = group.or(target).and_then(Value::as_str).unwrap_or("target");
+    if event == "recovered" {
+        format!("[pingushka] ВОССТАНОВЛЕНО {name}")
+    } else {
+        format!("[pingushka] СБОЙ {name}")
+    }
+}
+
+fn telegram_text(payload: &Value) -> String {
+    let event = payload
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("down");
+    let recovered = event == "recovered";
+    let failures = payload.get("failures").and_then(Value::as_u64).unwrap_or(0);
+    let since = payload.get("since").and_then(Value::as_str).unwrap_or("");
+    let scope = payload
+        .get("scope")
         .and_then(Value::as_str)
         .unwrap_or("target");
-    if event == "recovered" {
-        format!("[pingushka] RECOVERED {name}")
-    } else {
-        format!("[pingushka] DOWN {name}")
+    let when = human_time(since);
+    if scope == "group" {
+        let name = payload
+            .get("group")
+            .and_then(|group| group.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("группа");
+        let total = payload
+            .get("group")
+            .and_then(|group| group.get("targets_total"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let failed = payload
+            .get("group")
+            .and_then(|group| group.get("targets_failed"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let names = payload
+            .get("targets")
+            .and_then(Value::as_array)
+            .map(|targets| {
+                targets
+                    .iter()
+                    .filter_map(|target| target.get("name").and_then(Value::as_str))
+                    .take(5)
+                    .map(|name| format!("• {}", escape_html(name)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let title = if recovered {
+            "🟢 <b>ГРУППА ВОССТАНОВЛЕНА</b>"
+        } else {
+            "🔴 <b>СБОЙ ГРУППЫ</b>"
+        };
+        let count = if recovered {
+            format!("Целей: {total}")
+        } else {
+            format!("Целей: {total} · В сбое: {failed} · Сбоев подряд: {failures}")
+        };
+        return format!(
+            "{title}\n<b>{name}</b>\n{count}\n{names}\nВремя: {when}",
+            name = escape_html(name),
+            names = names,
+            when = when,
+        );
     }
+    let target = payload.get("target").cloned().unwrap_or(Value::Null);
+    let name = target.get("name").and_then(Value::as_str).unwrap_or("цель");
+    let kind = target
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("проверка");
+    let reference = target.get("ref").and_then(Value::as_str).unwrap_or("");
+    let title = if recovered {
+        "🟢 <b>ВОССТАНОВЛЕНО</b>"
+    } else {
+        "🔴 <b>СБОЙ</b>"
+    };
+    let details = if recovered {
+        format!("Время: {when}")
+    } else {
+        format!("Сбоев подряд: {failures}\nВремя: {when}")
+    };
+    format!(
+        "{title}\n<b>{name}</b>\n<code>{kind} {reference}</code>\n{details}",
+        name = escape_html(name),
+        kind = escape_html(kind),
+        reference = escape_html(reference),
+        details = details,
+    )
 }
 
 fn message_text(payload: &Value) -> String {
@@ -172,6 +256,37 @@ fn message_text(payload: &Value) -> String {
         .get("event")
         .and_then(Value::as_str)
         .unwrap_or("down");
+    let recovered = event == "recovered";
+    let since = payload.get("since").and_then(Value::as_str).unwrap_or("");
+    let when = human_time(since);
+    let failures = payload.get("failures").and_then(Value::as_u64).unwrap_or(0);
+    let scope = payload
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or("target");
+    if scope == "group" {
+        let name = payload
+            .get("group")
+            .and_then(|group| group.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("group");
+        let total = payload
+            .get("group")
+            .and_then(|group| group.get("targets_total"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let failed = payload
+            .get("group")
+            .and_then(|group| group.get("targets_failed"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if recovered {
+            return format!("Группа {name} восстановлена. Целей: {total}. Время: {when}");
+        }
+        return format!(
+            "Сбой группы {name}. Целей: {total}, в сбое: {failed}, сбоев подряд: {failures}. Время: {when}"
+        );
+    }
     let target = payload.get("target").cloned().unwrap_or(Value::Null);
     let name = target
         .get("name")
@@ -182,15 +297,39 @@ fn message_text(payload: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("check");
     let reference = target.get("ref").and_then(Value::as_str).unwrap_or("");
-    let failures = payload.get("failures").and_then(Value::as_u64).unwrap_or(0);
-    let since = payload.get("since").and_then(Value::as_str).unwrap_or("");
-    if event == "recovered" {
-        format!("pingushka: {name} ({kind} {reference}) is back UP.\nDown since: {since}")
+    if recovered {
+        format!("Цель {name} ({kind} {reference}) восстановлена. Время: {when}")
     } else {
         format!(
-            "pingushka: {name} ({kind} {reference}) is DOWN after {failures} consecutive failed checks.\nSince: {since}"
+            "Сбой цели {name} ({kind} {reference}) после {failures} неудачных проверок подряд. Время: {when}"
         )
     }
+}
+
+fn human_time(value: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+    ];
+    let Ok(time) =
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+    else {
+        return value.to_owned();
+    };
+    format!(
+        "{} {} {}, {:02}:{:02} UTC",
+        time.day(),
+        MONTHS[usize::from(time.month() as u8 - 1)],
+        time.year(),
+        time.hour(),
+        time.minute()
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

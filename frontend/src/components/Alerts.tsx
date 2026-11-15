@@ -8,12 +8,14 @@ import type {
   AlertEvent,
   AlertRule,
   Target,
+  TargetGroup,
 } from "../types";
 import type { ViewName } from "./Targets";
 import { Dialog, StatusDot } from "./ui";
 
 interface AlertsScreenProps {
   targets: Target[];
+  groups: TargetGroup[];
   user: string;
   onNavigate: (view: ViewName) => void;
   onLogout: () => void;
@@ -39,14 +41,16 @@ function defaultConfig(kind: AlertChannelKind): Record<string, unknown> {
   return { host: "", port: 587, from: "", to: "", username: "", password: "", tls: "starttls" };
 }
 
-function defaultsFor(target: Target, channels: AlertChannel[]): AlertRule {
+function emptyRule(channels: AlertChannel[]): AlertRule {
   return {
     id: "",
-    target_id: target.id,
-    target_name: target.name,
-    target_kind: target.spec.kind,
-    target_ref:
-      target.spec.kind === "http" ? target.spec.url : `${target.spec.host}${target.spec.kind === "tcp" ? `:${target.spec.port}` : ""}`,
+    scope: "target",
+    target_id: null,
+    group_id: null,
+    target_name: null,
+    target_kind: null,
+    target_ref: null,
+    group_name: null,
     enabled: true,
     mode: "all",
     failure_threshold: 3,
@@ -64,7 +68,7 @@ function defaultsFor(target: Target, channels: AlertChannel[]): AlertRule {
   };
 }
 
-export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScreenProps) {
+export function AlertsScreen({ targets, groups, user, onNavigate, onLogout }: AlertsScreenProps) {
   const [tab, setTab] = useState<Tab>("rules");
   const [channels, setChannels] = useState<AlertChannel[]>([]);
   const [rules, setRules] = useState<AlertRule[]>([]);
@@ -73,7 +77,11 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [ruleForm, setRuleForm] = useState<{ target: Target; rule: AlertRule } | null>(null);
+  const [ruleForm, setRuleForm] = useState<{
+    target: Target | null;
+    group: TargetGroup | null;
+    rule: AlertRule | null;
+  } | null>(null);
   const [channelForm, setChannelForm] = useState<{ channel: AlertChannel | null } | null>(null);
 
   const load = async (silent = false) => {
@@ -108,22 +116,38 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
   }, [toast]);
 
   const rulesByTarget = useMemo(
-    () => new Map(rules.map((rule) => [rule.target_id, rule])),
+    () =>
+      new Map(
+        rules
+          .filter((rule) => rule.target_id)
+          .map((rule) => [rule.target_id as string, rule]),
+      ),
+    [rules],
+  );
+  const rulesByGroup = useMemo(
+    () =>
+      new Map(
+        rules.filter((rule) => rule.group_id).map((rule) => [rule.group_id as string, rule]),
+      ),
     [rules],
   );
   const channelName = (id: string) => channels.find((channel) => channel.id === id)?.name ?? "канал";
   const unconfigured = targets.filter((target) => !rulesByTarget.has(target.id));
 
   const openRule = (target: Target) => {
-    const rule = rulesByTarget.get(target.id) ?? defaultsFor(target, channels);
-    setRuleForm({ target, rule });
+    setRuleForm({ target, group: null, rule: rulesByTarget.get(target.id) ?? null });
   };
+  const openGroupRule = (group: TargetGroup) => {
+    setRuleForm({ target: null, group, rule: rulesByGroup.get(group.id) ?? null });
+  };
+  const openNewRule = () => setRuleForm({ target: null, group: null, rule: null });
 
   const removeRule = async (rule: AlertRule) => {
-    if (!window.confirm(`Удалить правило для «${rule.target_name}»?`)) return;
+    const label = rule.target_name ?? rule.group_name ?? "правило";
+    if (!window.confirm(`Удалить правило для «${label}»?`)) return;
     setBusyId(rule.id);
     try {
-      await api.deleteAlertRule(rule.target_id);
+      await api.deleteAlertRuleById(rule.id);
       setToast("Правило удалено.");
       await load(true);
     } catch (cause) {
@@ -262,11 +286,8 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
                 <h2>Правила</h2>
                 <p>Сбой фиксируется, когда условие выполняется нужное число проверок подряд.</p>
               </div>
-              <button type="button" className="btn btn--ghost" onClick={() => {
-                const target = unconfigured[0] ?? targets[0];
-                if (target) openRule(target);
-              }}>
-                Настроить цель
+              <button type="button" className="btn btn--ghost" onClick={openNewRule}>
+                Создать правило
               </button>
             </div>
             {loading ? <div className="empty">Загрузка…</div> : null}
@@ -287,8 +308,12 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
                   <div className="rule-main">
                     <div className="rule-title">
                       <StatusDot health={rule.state.status === "firing" ? "fail" : rule.state.status === "pending" ? "warn" : "ok"} />
-                      <b>{rule.target_name}</b>
-                      <span className="rule-ref">{rule.target_ref}</span>
+                      <b>{rule.target_name ?? rule.group_name}</b>
+                            <span className="rule-ref">
+                              {rule.scope === "group"
+                                ? `группа · ${rule.group_name ?? ""}`
+                                : rule.target_ref}
+                            </span>
                       {!rule.enabled ? <span className="tag">выключено</span> : null}
                     </div>
                     <div className="rule-meta">
@@ -320,8 +345,13 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
                   </div>
                   <div className="rule-actions">
                     <button type="button" className="btn btn--ghost" onClick={() => {
-                      const target = targets.find((entry) => entry.id === rule.target_id);
-                      if (target) openRule(target);
+                      if (rule.scope === "group") {
+                        const group = groups.find((entry) => entry.id === rule.group_id);
+                        if (group) openGroupRule(group);
+                      } else {
+                        const target = targets.find((entry) => entry.id === rule.target_id);
+                        if (target) openRule(target);
+                      }
                     }}>
                       Изменить
                     </button>
@@ -412,7 +442,7 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
                     <span className={event.event === "down" ? "event event--down" : "event event--up"}>
                       {event.event === "down" ? "DOWN" : "RECOVERED"}
                     </span>
-                    <span>{event.target_name}</span>
+                    <span>{event.target_name ?? event.group_name ?? "—"}</span>
                     <span>{event.channel_name}</span>
                     <span className={`delivery delivery--${event.status}`} title={event.last_error ?? undefined}>
                       {event.status === "sent" ? "отправлено" : event.status === "failed" ? "ошибка" : event.status === "sending" ? "отправка" : "в очереди"}
@@ -437,7 +467,11 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
       {ruleForm ? (
         <RuleDialog
           target={ruleForm.target}
-          rule={ruleForm.rule}
+          group={ruleForm.group}
+          targets={targets}
+          groups={groups}
+          rule={ruleForm.rule ?? emptyRule(channels)}
+          editing={ruleForm.rule !== null}
           channels={channels}
           onClose={() => setRuleForm(null)}
           onSaved={async () => {
@@ -473,19 +507,32 @@ export function AlertsScreen({ targets, user, onNavigate, onLogout }: AlertsScre
 
 function RuleDialog({
   target,
+  group,
+  targets,
+  groups,
   rule,
+  editing,
   channels,
   onClose,
   onSaved,
   onError,
 }: {
-  target: Target;
+  target: Target | null;
+  group: TargetGroup | null;
+  targets: Target[];
+  groups: TargetGroup[];
   rule: AlertRule;
+  editing: boolean;
   channels: AlertChannel[];
   onClose: () => void;
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
 }) {
+  const [scope, setScope] = useState<"target" | "group">(
+    group ? "group" : rule.scope,
+  );
+  const [targetId, setTargetId] = useState(target?.id ?? rule.target_id ?? "");
+  const [groupId, setGroupId] = useState(group?.id ?? rule.group_id ?? "");
   const [enabled, setEnabled] = useState(rule.enabled);
   const [mode, setMode] = useState(rule.mode);
   const [failure, setFailure] = useState(rule.failure_threshold);
@@ -496,10 +543,18 @@ function RuleDialog({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (scope === "target" && targetId === "") {
+      onError("Выберите цель для правила.");
+      return;
+    }
+    if (scope === "group" && groupId === "") {
+      onError("Выберите группу для правила.");
+      return;
+    }
     setBusy(true);
     try {
       await api.saveAlertRule({
-        target_id: target.id,
+        ...(scope === "target" ? { target_id: targetId } : { group_id: groupId }),
         enabled,
         mode,
         failure_threshold: failure,
@@ -515,10 +570,15 @@ function RuleDialog({
     }
   };
 
+  const title =
+    scope === "group"
+      ? `Правило · ${groups.find((entry) => entry.id === groupId)?.name ?? "группа"}`
+      : `Правило · ${targets.find((entry) => entry.id === targetId)?.name ?? "цель"}`;
+
   return (
     <Dialog
-      title={`Правило · ${target.name}`}
-      subtitle={target.spec.kind === "http" ? target.spec.url : target.spec.host}
+      title={title}
+      subtitle="правило применяется к цели или ко всей группе"
       onClose={onClose}
       footer={
         <>
@@ -532,6 +592,58 @@ function RuleDialog({
       }
     >
       <form id="rule-form" className="form" onSubmit={submit}>
+        {!editing ? (
+          <div className="field">
+            <label htmlFor="rule-scope">Область правила</label>
+            <select
+              id="rule-scope"
+              value={scope}
+              onChange={(event) => setScope(event.target.value as "target" | "group")}
+            >
+              <option value="target">Цель</option>
+              <option value="group">Группа</option>
+            </select>
+          </div>
+        ) : null}
+        {scope === "target" ? (
+          <div className="field">
+            <label htmlFor="rule-target">Цель</label>
+            <select
+              id="rule-target"
+              value={targetId}
+              onChange={(event) => setTargetId(event.target.value)}
+              disabled={editing}
+            >
+              <option value="">Выберите цель</option>
+              {targets.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="field">
+            <label htmlFor="rule-group">Группа</label>
+            <select
+              id="rule-group"
+              value={groupId}
+              onChange={(event) => setGroupId(event.target.value)}
+              disabled={editing}
+            >
+              <option value="">Выберите группу</option>
+              {groups.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              Правило группы работает как шаблон для целей без своего правила и как отдельный
+              групповой инцидент.
+            </p>
+          </div>
+        )}
         <label className="check">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
           Правило включено
