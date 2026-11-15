@@ -614,7 +614,7 @@ export function TargetsScreen(props: TargetsProps) {
                       return (
                         <div key={target.id} className="row-wrap">
                           <div
-                            className={`row${bulk ? " row--bulk" : ""}`}
+                            className={`row row--target${bulk ? " row--bulk" : ""}`}
                             aria-current={selectedId === target.id ? "true" : undefined}
                           >
                             {bulk ? (
