@@ -133,6 +133,8 @@ Agents connect outbound to the Hub over WebSocket, so they work behind NAT. Conf
 
 ## Security model
 
+Security reports: see [SECURITY.md](SECURITY.md). Do not open a public issue for a vulnerability.
+
 - The first browser visit creates a single local administrator; there is no public signup.
 - Passwords are hashed with Argon2id. Sessions use HttpOnly cookies (`SameSite=Lax`, `Secure` behind HTTPS) and login attempts are rate-limited.
 - Enrollment tokens are one-time, valid for 30 minutes and stored hashed on the Hub.
