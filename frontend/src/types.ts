@@ -36,6 +36,20 @@ export type TargetSpec =
   | { kind: "tcp"; host: string; port: number }
   | { kind: "icmp"; host: string };
 
+export interface TargetGroupRef {
+  id: string;
+  name: string;
+}
+
+export interface TargetGroup {
+  id: string;
+  name: string;
+  target_count: number;
+  rule_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Target {
   id: string;
   name: string;
@@ -44,8 +58,26 @@ export interface Target {
   timeout_ms: number;
   enabled: boolean;
   agent_ids: string[];
+  group: TargetGroupRef | null;
+  tags: string[];
   created_at: string;
   updated_at: string;
+}
+
+export type BulkGroupMode =
+  | { mode: "keep" }
+  | { mode: "clear" }
+  | { mode: "set"; group_id: string }
+  | { mode: "create"; name: string };
+
+export type BulkTagMode =
+  | { mode: "keep" }
+  | { mode: "add" | "remove" | "replace"; values: string[] };
+
+export interface BulkTargetInput {
+  target_ids: string[];
+  group: BulkGroupMode;
+  tags: BulkTagMode;
 }
 
 export type CheckMode = "http" | "tcp" | "icmp" | "tcp_fallback";
@@ -107,10 +139,13 @@ export interface AlertState {
 
 export interface AlertRule {
   id: string;
-  target_id: string;
-  target_name: string;
-  target_kind: string;
-  target_ref: string;
+  scope: "target" | "group";
+  target_id: string | null;
+  group_id: string | null;
+  target_name: string | null;
+  target_kind: string | null;
+  target_ref: string | null;
+  group_name: string | null;
   enabled: boolean;
   mode: "all" | "any";
   failure_threshold: number;
@@ -121,7 +156,8 @@ export interface AlertRule {
 }
 
 export interface AlertRuleInput {
-  target_id: string;
+  target_id?: string;
+  group_id?: string;
   enabled: boolean;
   mode: "all" | "any";
   failure_threshold: number;
@@ -133,7 +169,8 @@ export interface AlertRuleInput {
 export interface AlertEvent {
   id: string;
   event: "down" | "recovered";
-  target_name: string;
+  target_name: string | null;
+  group_name: string | null;
   channel_name: string;
   status: "pending" | "sending" | "sent" | "failed";
   attempts: number;

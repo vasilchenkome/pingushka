@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorText, isUnauthorized } from "./api";
 import { buildMetrics, orderedAgentIds, pluralAgents, type TargetMetrics } from "./metrics";
-import type { Agent, CheckResult, ProvisionResponse, Summary, Target, User } from "./types";
+import type {
+  Agent,
+  CheckResult,
+  ProvisionResponse,
+  Summary,
+  Target,
+  TargetGroup,
+  User,
+} from "./types";
 import { LoginScreen, SetupScreen } from "./components/Auth";
 import { AgentsScreen, InstallDialog } from "./components/Agents";
 import { AlertsScreen } from "./components/Alerts";
@@ -22,6 +30,7 @@ export function App() {
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
+  const [groups, setGroups] = useState<TargetGroup[]>([]);
   const [histories, setHistories] = useState<Record<string, CheckResult[]>>({});
   const [summaries, setSummaries] = useState<Record<string, Summary>>({});
   const [loading, setLoading] = useState(true);
@@ -97,7 +106,11 @@ export function App() {
       if (!silent) setLoading(true);
       setLoadError(null);
       try {
-        const [nextAgents, nextTargets] = await Promise.all([api.agents(), api.targets()]);
+        const [nextAgents, nextTargets, nextGroups] = await Promise.all([
+          api.agents(),
+          api.targets(),
+          api.targetGroups(),
+        ]);
         const [entries, summaryEntries] = await Promise.all([
           Promise.all(
             nextTargets.map(async (target) => {
@@ -123,6 +136,7 @@ export function App() {
         ]);
         setAgents(nextAgents);
         setTargets(nextTargets);
+        setGroups(nextGroups);
         setHistories(Object.fromEntries(entries));
         setSummaries(
           Object.fromEntries(
@@ -376,6 +390,7 @@ export function App() {
             <TargetsScreen
               agents={agents}
               targets={filteredTargets}
+              groups={groups}
               metrics={metrics}
               selectedId={selectedId}
               onSelect={(id) => {
@@ -392,6 +407,7 @@ export function App() {
                 if (phone) setSelectedId(null);
               }}
               onLogout={() => void logout()}
+              onChanged={() => void refresh(true)}
               selectedAgentIds={chartAgents}
               query={query}
               onQuery={setQuery}
@@ -432,6 +448,7 @@ export function App() {
           ) : (
             <AlertsScreen
               targets={targets}
+              groups={groups}
               user={user.username}
               onNavigate={(next) => {
                 setView(next);
@@ -447,6 +464,8 @@ export function App() {
         <TargetForm
           target={formTarget}
           agents={agents}
+          groups={groups}
+          tagSuggestions={[...new Set(targets.flatMap((target) => target.tags))].sort()}
           onClose={() => setFormTarget(undefined)}
           onSaved={(saved, created) => {
             setFormTarget(undefined);
