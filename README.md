@@ -14,7 +14,7 @@ Pingushka runs HTTP(S), TCP-port and ICMP checks from agents in different networ
 
 ## Status
 
-**v0.2.0 — alerts.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment. The dashboard now includes alert rules, delivery channels and a delivery journal.
+**v0.2.1 — target groups and tags.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment. Targets can now be organised into groups, tagged, sorted, filtered and edited in bulk; alert rules work per target or per group.
 
 The dashboard UI is currently in Russian.
 
@@ -33,6 +33,8 @@ The dashboard UI is currently in Russian.
 - **Multi-arch images** — `linux/amd64` and `linux/arm64`, built on native GitHub runners.
 - **Alerts** — Telegram, generic webhooks and SMTP email. Rules use a failure threshold, a recovery threshold and a cooldown; each incident produces exactly one `down` and one `recovered` message.
 - **Delivery journal** — encrypted channel secrets, an outbox with retries and a per-event status visible in the dashboard.
+- **Groups and tags** — a flat group tree, up to 10 tags per target, a group manager, tag filters, sorting, collapsible groups and bulk group/tag edits. Groups and tags never change probe behaviour or reach agents.
+- **Group alert rules** — a rule can cover a whole group; it acts as the default for targets without their own rule and raises a separate group incident.
 
 ## Screenshots
 
@@ -54,7 +56,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Set a strong `POSTGRES_PASSWORD` in `.env`, generate `ALERT_SECRET_KEY` with `openssl rand -hex 32`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.2.0`.
+Set a strong `POSTGRES_PASSWORD` in `.env`, generate `ALERT_SECRET_KEY` with `openssl rand -hex 32`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.2.1`.
 
 ```sh
 docker compose pull postgres hub
@@ -69,7 +71,7 @@ Create an agent in **Agents** and run the generated command on a Linux host. Eac
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.2.0
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.2.1
 ```
 
 The installer:
@@ -84,7 +86,7 @@ Results are buffered in `/var/lib/pingushka/buffer.jsonl`. Logs: `journalctl -u 
 
 The installer also enables a daily `pingushka-agent-update.timer`. It checks the latest stable release with a randomized delay, verifies the checksum and replaces the binary atomically. If the service does not come back, the previous binary is restored. Disable it with `--no-auto-update`; logs: `journalctl -u pingushka-agent-update -f`.
 
-Use `--version v0.2.0` to pin a release; omit it to install the latest one.
+Use `--version v0.2.1` to pin a release; omit it to install the latest one.
 
 ### Uninstall an agent
 
@@ -123,7 +125,7 @@ ALERT_SECRET_KEY=<openssl rand -hex 32>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.2.0
+PINGUSHKA_VERSION=0.2.1
 ```
 
 ```sh
@@ -209,8 +211,8 @@ The local PostgreSQL port is bound to `127.0.0.1`. `.env` is ignored by Git. `do
 
 ## Releases and images
 
-- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.2.0` (also `0.2`, `latest`, `main`, `sha-*`), multi-arch.
-- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.2.0`, multi-arch, for container-based probes.
+- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.2.1` (also `0.2`, `latest`, `main`, `sha-*`), multi-arch.
+- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.2.1`, multi-arch, for container-based probes.
 - Release binaries: <https://github.com/vasilchenkome/pingushka/releases>.
 - The `Image` workflow publishes on pushes to `main` and on `v*` tags.
 - The `Release` workflow builds the Hub and agent binaries with `SHA256SUMS` for `install.sh`.
