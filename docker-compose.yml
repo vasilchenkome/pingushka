@@ -27,6 +27,9 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       INSTALL_SCRIPT_URL: ${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ALERT_SECRET_KEY: ${ALERT_SECRET_KEY:?Set ALERT_SECRET_KEY in .env or the environment}
+      ALERT_EVALUATE_INTERVAL_SECS: ${ALERT_EVALUATE_INTERVAL_SECS:-30}
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
       STATIC_DIR: /app/static
     depends_on:
       postgres:

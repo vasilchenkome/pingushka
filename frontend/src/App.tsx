@@ -4,6 +4,7 @@ import { buildMetrics, orderedAgentIds, pluralAgents, type TargetMetrics } from 
 import type { Agent, CheckResult, ProvisionResponse, Summary, Target, User } from "./types";
 import { LoginScreen, SetupScreen } from "./components/Auth";
 import { AgentsScreen, InstallDialog } from "./components/Agents";
+import { AlertsScreen } from "./components/Alerts";
 import { TargetsScreen, type StatusFilter, type ViewName } from "./components/Targets";
 import { TargetDetail } from "./components/TargetDetail";
 import { TargetForm } from "./components/TargetForm";
@@ -324,6 +325,16 @@ export function App() {
             >
               Агенты <span className="n">{agents.length}</span>
             </button>
+            <button
+              type="button"
+              aria-current={view === "alerts" ? "page" : undefined}
+              onClick={() => {
+                setView("alerts");
+                if (phone) setSelectedId(null);
+              }}
+            >
+              Оповещения
+            </button>
           </nav>
           <div className="spine-foot">
             <div className="online">
@@ -394,7 +405,7 @@ export function App() {
               phone={phone}
               busyTargetId={busyTargetId}
             />
-          ) : (
+          ) : view === "agents" ? (
             <AgentsScreen
               agents={agents}
               targets={targets}
@@ -417,6 +428,16 @@ export function App() {
                 setToast("Агент удалён.");
               }}
               onProvision={setProvision}
+            />
+          ) : (
+            <AlertsScreen
+              targets={targets}
+              user={user.username}
+              onNavigate={(next) => {
+                setView(next);
+                if (phone) setSelectedId(null);
+              }}
+              onLogout={() => void logout()}
             />
           )}
         </div>

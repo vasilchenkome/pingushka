@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod alerts;
 pub mod error;
 pub mod health;
 pub mod session;
@@ -14,9 +15,10 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, header},
-    routing::{any, delete, get, patch, post},
+    routing::{any, delete, get, patch, post, put},
 };
 use pingushka_application::{
+    alerts::{AlertRepository, NotificationSender, SecretCipher},
     ports::{
         AgentControlGateway, AgentEnrollmentRepository, AgentRepository, CheckResultRepository,
         Clock, HealthCheck, PasswordHasher, SessionRepository, TargetRepository, TokenDigester,
@@ -82,6 +84,9 @@ pub struct HubPorts {
     pub enrollments: Arc<dyn AgentEnrollmentRepository>,
     pub targets: Arc<dyn TargetRepository>,
     pub results: Arc<dyn CheckResultRepository>,
+    pub alerts: Arc<dyn AlertRepository>,
+    pub cipher: Arc<dyn SecretCipher>,
+    pub notifier: Arc<dyn NotificationSender>,
     pub health: Arc<dyn HealthCheck>,
     pub clock: Arc<dyn Clock>,
     pub hasher: Arc<dyn PasswordHasher>,
@@ -107,6 +112,9 @@ pub struct AppState {
     pub agents: Arc<dyn AgentRepository>,
     pub targets: Arc<dyn TargetRepository>,
     pub results: Arc<dyn CheckResultRepository>,
+    pub alerts: Arc<dyn AlertRepository>,
+    pub cipher: Arc<dyn SecretCipher>,
+    pub notifier: Arc<dyn NotificationSender>,
     pub health: Arc<dyn HealthCheck>,
     pub clock: Arc<dyn Clock>,
     pub digester: Arc<dyn TokenDigester>,
@@ -209,6 +217,9 @@ impl AppState {
             agents: ports.agents,
             targets: ports.targets,
             results: ports.results,
+            alerts: ports.alerts,
+            cipher: ports.cipher,
+            notifier: ports.notifier,
             health: ports.health,
             clock: ports.clock,
             digester: ports.digester,
@@ -248,6 +259,22 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/targets/{id}/check", post(targets::check_now))
         .route("/api/targets/{id}/results", get(targets::history))
         .route("/api/summary", get(targets::summary))
+        .route(
+            "/api/alerts/channels",
+            get(alerts::list_channels).post(alerts::create_channel),
+        )
+        .route(
+            "/api/alerts/channels/{id}",
+            put(alerts::update_channel).delete(alerts::delete_channel),
+        )
+        .route("/api/alerts/channels/{id}/test", post(alerts::test_channel))
+        .route(
+            "/api/alerts/rules",
+            get(alerts::list_rules).put(alerts::upsert_rule),
+        )
+        .route("/api/alerts/rules/{target_id}", delete(alerts::delete_rule))
+        .route("/api/alerts/events", get(alerts::list_events))
+        .route("/api/alerts/events/{id}/retry", post(alerts::retry_event))
         .route("/api/{*rest}", any(not_found));
 
     let router = match static_dir {

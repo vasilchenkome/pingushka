@@ -14,7 +14,7 @@ Pingushka runs HTTP(S), TCP-port and ICMP checks from agents in different networ
 
 ## Status
 
-**v0.1.3 — MVP released.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment.
+**v0.2.0 — alerts.** The Hub, PostgreSQL storage, authenticated REST API, WebSocket protocol, Linux agent, SPA dashboard, Docker image, releases and the `install.sh` installer are implemented and used in a live deployment. The dashboard now includes alert rules, delivery channels and a delivery journal.
 
 The dashboard UI is currently in Russian.
 
@@ -30,13 +30,19 @@ The dashboard UI is currently in Russian.
 - **One-time enrollment** — a 256-bit token is exchanged for a permanent credential; the Hub stores only its SHA-256 hash.
 - **Authentication** — first-run administrator setup, Argon2id passwords, HttpOnly session cookies, login rate limiting.
 - **Docker and HTTPS** — the Hub image serves the SPA itself; Docker Compose includes PostgreSQL and Caddy with automatic TLS.
-- **Multi-architecture images** — `linux/amd64` and `linux/arm64`, built on native GitHub runners.
+- **Multi-arch images** — `linux/amd64` and `linux/arm64`, built on native GitHub runners.
+- **Alerts** — Telegram, generic webhooks and SMTP email. Rules use a failure threshold, a recovery threshold and a cooldown; each incident produces exactly one `down` and one `recovered` message.
+- **Delivery journal** — encrypted channel secrets, an outbox with retries and a per-event status visible in the dashboard.
 
 ## Screenshots
 
-| Agents | Mobile |
+| Targets | Agents |
 | --- | --- |
-| ![Agents](assets/screenshots/agents-1440.png) | ![Mobile targets](assets/screenshots/targets-mobile-390.png) |
+| ![Targets](assets/screenshots/targets-1440.png) | ![Agents](assets/screenshots/agents-1440.png) |
+
+| Alerts | Alerts on a phone |
+| --- | --- |
+| ![Alerts](assets/screenshots/alerts-1440.png) | ![Alerts on a phone](assets/screenshots/alerts-mobile-390.png) |
 
 ## Quick start
 
@@ -48,7 +54,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Set a strong `POSTGRES_PASSWORD` in `.env`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.1.3`.
+Set a strong `POSTGRES_PASSWORD` in `.env`, generate `ALERT_SECRET_KEY` with `openssl rand -hex 32`, keep `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` and choose a release, for example `PINGUSHKA_VERSION=0.2.0`.
 
 ```sh
 docker compose pull postgres hub
@@ -63,7 +69,7 @@ Create an agent in **Agents** and run the generated command on a Linux host. Eac
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.1.3
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <token> --version v0.2.0
 ```
 
 The installer:
@@ -78,7 +84,7 @@ Results are buffered in `/var/lib/pingushka/buffer.jsonl`. Logs: `journalctl -u 
 
 The installer also enables a daily `pingushka-agent-update.timer`. It checks the latest stable release with a randomized delay, verifies the checksum and replaces the binary atomically. If the service does not come back, the previous binary is restored. Disable it with `--no-auto-update`; logs: `journalctl -u pingushka-agent-update -f`.
 
-Use `--version v0.1.3` to pin a release; omit it to install the latest one.
+Use `--version v0.2.0` to pin a release; omit it to install the latest one.
 
 ### Uninstall an agent
 
@@ -97,16 +103,27 @@ sudo userdel pingushka
 
 Then delete the agent in the dashboard to revoke its credential.
 
+## Alerts
+
+Open **Alerts** in the dashboard, add a channel and then attach a rule to a target.
+
+- **Telegram** — bot token and chat ID. The Hub calls `sendMessage`.
+- **Webhook** — an HTTP(S) endpoint. The JSON body is the event payload; when a secret is set, the request carries `X-Pingushka-Signature: sha256=<hex HMAC-SHA256>`.
+- **Email** — SMTP host, port, From/To and optional credentials; STARTTLS (587), implicit TLS (465) or plain SMTP for local Mailpit.
+
+A rule uses `all` (every fresh agent sees a failure) or `any`; offline agents are ignored. A `down` event is created after `failure_threshold` consecutive failed evaluations; `recovered` is created after `recovery_threshold` successful ones. Each incident sends one `down` and one `recovered`; a new failure during `cooldown_secs` waits as `pending` instead of sending a duplicate. Channel secrets are encrypted and never returned by the API.
+
 ## Public deployment
 
 Point a DNS `A`/`AAAA` record at the host and set the domain in `.env`:
 
 ```dotenv
 POSTGRES_PASSWORD=<long-random-password>
+ALERT_SECRET_KEY=<openssl rand -hex 32>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.1.3
+PINGUSHKA_VERSION=0.2.0
 ```
 
 ```sh
@@ -141,6 +158,7 @@ Security reports: see [SECURITY.md](SECURITY.md). Do not open a public issue for
 - Agent credentials are stored only on the agent, in a `0600` configuration file.
 - Rotating an agent credential closes its current WebSocket session.
 - The Hub is not published directly: Caddy terminates TLS and proxies to it.
+- Alert channel secrets are encrypted with XChaCha20-Poly1305 using `ALERT_SECRET_KEY`; the API never returns them after saving.
 - CI ignores RUSTSEC-2026-0459 for `libsqlite3-sys`: it is pulled in by sqlx's optional SQLite dependency, which is not enabled; Pingushka uses PostgreSQL only.
 
 ## Configuration
@@ -160,6 +178,9 @@ The Hub reads these environment variables:
 | `PRUNE_INTERVAL_MINUTES` | `60` | Background pruning interval. |
 | `STATIC_DIR` | — | Directory with the built SPA. The image sets `/app/static`. |
 | `INSTALL_SCRIPT_URL` | GitHub raw URL | Installer URL shown with generated agent commands. |
+| `ALERT_SECRET_KEY` | — | 32-byte hex or base64 key for encrypting alert channel secrets. Required. Keep it stable; changing it makes saved channel secrets unreadable. |
+| `ALERT_EVALUATE_INTERVAL_SECS` | `30` | How often alert rules are evaluated. |
+| `TELEGRAM_API_BASE` | `https://api.telegram.org` | Telegram Bot API base; override only for a local mock. |
 
 Docker Compose also reads `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DOMAIN` and `PINGUSHKA_VERSION`.
 
@@ -188,8 +209,8 @@ The local PostgreSQL port is bound to `127.0.0.1`. `.env` is ignored by Git. `do
 
 ## Releases and images
 
-- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.1.3` (also `0.1`, `latest`, `main`, `sha-*`), multi-arch.
-- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.1.3`, multi-arch, for container-based probes.
+- Hub image: `ghcr.io/vasilchenkome/pingushka-hub:0.2.0` (also `0.2`, `latest`, `main`, `sha-*`), multi-arch.
+- Agent image: `ghcr.io/vasilchenkome/pingushka-agent:0.2.0`, multi-arch, for container-based probes.
 - Release binaries: <https://github.com/vasilchenkome/pingushka/releases>.
 - The `Image` workflow publishes on pushes to `main` and on `v*` tags.
 - The `Release` workflow builds the Hub and agent binaries with `SHA256SUMS` for `install.sh`.
@@ -197,12 +218,12 @@ The local PostgreSQL port is bound to `127.0.0.1`. `.env` is ignored by Git. `do
 ## Limitations and roadmap
 
 - Agents support Linux x86_64 and ARM64 only.
-- No alerts yet: the dashboard shows state and history, but does not send notifications.
+- Alert channels are Telegram, generic webhooks and SMTP email; SMS, PagerDuty and Opsgenie are not built in.
 - The auto-updater restarts `pingushka-agent.service` only; additional agent units on the same host must be restarted manually.
 - One administrator, no roles or SSO.
 - The dashboard UI is Russian-only.
 
-Planned next: Telegram and webhook notifications with failure thresholds and recovery messages.
+Planned next: more channel integrations and high-availability guidance.
 
 ## License
 

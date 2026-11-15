@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod alerts;
 mod mapper;
 mod repository;
 

@@ -12,7 +12,7 @@ import { TargetDetail } from "./TargetDetail";
 import { StatusDot } from "./ui";
 
 export type StatusFilter = "all" | "fail" | "slow";
-export type ViewName = "targets" | "agents";
+export type ViewName = "targets" | "agents" | "alerts";
 
 interface TargetsProps {
   agents: Agent[];
@@ -186,6 +186,9 @@ export function TargetsScreen(props: TargetsProps) {
         </button>
         <button type="button" onClick={() => onNavigate("agents")}>
           Агенты <span className="n">{agents.length}</span>
+        </button>
+        <button type="button" onClick={() => onNavigate("alerts")}>
+          Оповещения
         </button>
       </nav>
 

@@ -146,6 +146,9 @@ export function AgentsScreen({
         <button type="button" aria-current="page" onClick={() => onNavigate("agents")}>
           Агенты <span className="n">{agents.length}</span>
         </button>
+        <button type="button" onClick={() => onNavigate("alerts")}>
+          Оповещения
+        </button>
       </nav>
 
       <div className="agent-note">

@@ -2,6 +2,11 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHasher as _, PasswordVerifier as _, phc::PasswordHash as EncodedHash},
 };
+use chacha20poly1305::{
+    KeyInit, XChaCha20Poly1305, XNonce,
+    aead::{Aead, Payload},
+};
+use pingushka_application::alerts::{AlertServiceError, SecretCipher};
 use pingushka_application::ports::{PasswordHasher, SecurityError, TokenDigester, TokenGenerator};
 use pingushka_domain::{identity::TokenDigest, user::PasswordHash};
 use rand::{TryRng, rngs::SysRng};
@@ -58,4 +63,80 @@ fn hex_encode(bytes: &[u8]) -> String {
         encoded.push(char::from(HEX[(byte & 0x0f) as usize]));
     }
     encoded
+}
+
+pub struct AlertSecretCipher {
+    cipher: XChaCha20Poly1305,
+}
+
+impl AlertSecretCipher {
+    pub fn new(key: [u8; 32]) -> Self {
+        Self {
+            cipher: XChaCha20Poly1305::new((&key).into()),
+        }
+    }
+
+    pub fn from_configured_key(value: &str) -> Result<Self, String> {
+        let value = value.trim();
+        let bytes = if value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            (0..value.len())
+                .step_by(2)
+                .map(|index| u8::from_str_radix(&value[index..index + 2], 16))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "ALERT_SECRET_KEY is not valid hex".to_owned())?
+        } else {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(value)
+                .map_err(|_| "ALERT_SECRET_KEY must be 32 bytes hex or base64".to_owned())?
+        };
+        let key: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| "ALERT_SECRET_KEY must decode to 32 bytes".to_owned())?;
+        Ok(Self::new(key))
+    }
+}
+
+impl SecretCipher for AlertSecretCipher {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, AlertServiceError> {
+        let mut nonce = [0_u8; 24];
+        SysRng
+            .try_fill_bytes(&mut nonce)
+            .map_err(|error| AlertServiceError::Cipher(error.to_string()))?;
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: b"pingushka-alert-channel-v1",
+                },
+            )
+            .map_err(|_| AlertServiceError::Cipher("encryption failed".to_owned()))?;
+        let mut output = Vec::with_capacity(nonce.len() + ciphertext.len());
+        output.extend_from_slice(&nonce);
+        output.extend_from_slice(&ciphertext);
+        Ok(output)
+    }
+
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, AlertServiceError> {
+        if ciphertext.len() <= 24 {
+            return Err(AlertServiceError::Cipher(
+                "ciphertext is too short".to_owned(),
+            ));
+        }
+        let (nonce, encrypted) = ciphertext.split_at(24);
+        let nonce: [u8; 24] = nonce
+            .try_into()
+            .map_err(|_| AlertServiceError::Cipher("invalid nonce".to_owned()))?;
+        self.cipher
+            .decrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: encrypted,
+                    aad: b"pingushka-alert-channel-v1",
+                },
+            )
+            .map_err(|_| AlertServiceError::Cipher("decryption failed".to_owned()))
+    }
 }

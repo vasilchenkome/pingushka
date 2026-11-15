@@ -73,6 +73,7 @@ jobs:
       - name: Start Hub and PostgreSQL
         env:
           POSTGRES_PASSWORD: ci-smoke
+          ALERT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           PUBLIC_URL: http://127.0.0.1:8080
           COOKIE_SECURE: "false"
           PINGUSHKA_VERSION: ci
@@ -97,4 +98,5 @@ jobs:
         if: always()
         env:
           POSTGRES_PASSWORD: ci-smoke
+          ALERT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: docker compose down -v

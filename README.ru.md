@@ -14,7 +14,7 @@ Pingushka выполняет проверки HTTP(S), TCP-портов и ICMP 
 
 ## Статус
 
-**v0.1.3 — MVP выпущен.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании.
+**v0.2.0 — оповещения.** Hub, хранилище PostgreSQL, REST API с авторизацией, WebSocket-протокол, Linux-агент, SPA-дашборд, Docker-образ, релизы и установщик `install.sh` реализованы и используются в живом развёртывании. В дашборде появились правила оповещений, каналы доставки и журнал отправок.
 
 Интерфейс дашборда пока на русском.
 
@@ -31,12 +31,18 @@ Pingushka выполняет проверки HTTP(S), TCP-портов и ICMP 
 - **Авторизация** — создание администратора при первом запуске, Argon2id, HttpOnly-сессии, ограничение попыток входа.
 - **Docker и HTTPS** — образ Hub сам раздаёт SPA; Docker Compose включает PostgreSQL и Caddy с автоматическим TLS.
 - **Multi-arch образы** — `linux/amd64` и `linux/arm64`, сборка на нативных раннерах GitHub.
+- **Оповещения** — Telegram, произвольный webhook и SMTP-письма. У правила есть порог сбоев, порог восстановления и cooldown; на инцидент отправляется ровно один `down` и один `recovered`.
+- **Журнал доставки** — секреты каналов шифруются, отправка идёт через outbox с ретраями, статус каждого события виден в дашборде.
 
 ## Скриншоты
 
-| Агенты | Телефон |
+| Цели | Агенты |
 | --- | --- |
-| ![Агенты](assets/screenshots/agents-1440.png) | ![Цели на телефоне](assets/screenshots/targets-mobile-390.png) |
+| ![Цели](assets/screenshots/targets-1440.png) | ![Агенты](assets/screenshots/agents-1440.png) |
+
+| Оповещения | Оповещения на телефоне |
+| --- | --- |
+| ![Оповещения](assets/screenshots/alerts-1440.png) | ![Оповещения на телефоне](assets/screenshots/alerts-mobile-390.png) |
 
 ## Быстрый старт
 
@@ -48,7 +54,7 @@ cd pingushka
 cp .env.example .env
 ```
 
-Задайте надёжный `POSTGRES_PASSWORD` в `.env`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.1.3`.
+Задайте надёжный `POSTGRES_PASSWORD` в `.env`, сгенерируйте `ALERT_SECRET_KEY` командой `openssl rand -hex 32`, оставьте `PUBLIC_URL=http://127.0.0.1:8080`, `COOKIE_SECURE=false` и выберите релиз, например `PINGUSHKA_VERSION=0.2.0`.
 
 ```sh
 docker compose pull postgres hub
@@ -63,7 +69,7 @@ docker compose up -d --no-build postgres hub
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/install.sh \
-  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.1.3
+  | sudo sh -s -- --hub https://monitor.example.com --enrollment-token <токен> --version v0.2.0
 ```
 
 Установщик:
@@ -78,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/vasilchenkome/pingushka/main/instal
 
 Установщик также включает ежедневный `pingushka-agent-update.timer`. Он проверяет последний стабильный релиз со случайной задержкой, сверяет контрольную сумму и атомарно заменяет бинарь. Если служба не поднялась, возвращается предыдущий бинарь. Отключить: `--no-auto-update`; логи: `journalctl -u pingushka-agent-update -f`.
 
-`--version v0.1.3` фиксирует релиз; без него ставится последний.
+`--version v0.2.0` фиксирует релиз; без него ставится последний.
 
 ### Удаление агента
 
@@ -97,16 +103,27 @@ sudo userdel pingushka
 
 После этого удалите агента в дашборде, чтобы отозвать credential.
 
+## Оповещения
+
+Откройте **Оповещения** в дашборде, добавьте канал, затем привяжите к цели правило.
+
+- **Telegram** — bot token и chat ID. Hub вызывает `sendMessage`.
+- **Webhook** — HTTP(S)-эндпоинт. Тело запроса — JSON события; если задан секрет, запрос несёт `X-Pingushka-Signature: sha256=<hex HMAC-SHA256>`.
+- **Email** — SMTP host, port, From/To и опциональные логин/пароль; STARTTLS (587), implicit TLS (465) или обычный SMTP для локального Mailpit.
+
+Правило использует режим `all` (все агенты со свежим результатом видят сбой) или `any`; offline-агенты игнорируются. Событие `down` создаётся после `failure_threshold` неудачных оценок подряд, `recovered` — после `recovery_threshold` успешных. На инцидент уходит один `down` и один `recovered`; новый сбой в течение `cooldown_secs` ждёт в `pending` и не создаёт дубль. Секреты каналов шифруются и не возвращаются API.
+
 ## Публичное развёртывание
 
 Направьте `A`/`AAAA`-запись домена на сервер и укажите домен в `.env`:
 
 ```dotenv
 POSTGRES_PASSWORD=<длинный-случайный-пароль>
+ALERT_SECRET_KEY=<openssl rand -hex 32>
 PUBLIC_URL=https://monitor.example.com
 COOKIE_SECURE=true
 DOMAIN=monitor.example.com
-PINGUSHKA_VERSION=0.1.3
+PINGUSHKA_VERSION=0.2.0
 ```
 
 ```sh
@@ -141,6 +158,7 @@ Caddy получает сертификат Let's Encrypt, перенаправ�
 - Credential агента хранится только у агента, в конфиге с правами `0600`.
 - Ротация credential закрывает текущую WebSocket-сессию агента.
 - Hub не публикуется напрямую: TLS терминирует Caddy.
+- Секреты каналов оповещений шифруются XChaCha20-Poly1305 ключом `ALERT_SECRET_KEY`; API не возвращает их после сохранения.
 - CI игнорирует RUSTSEC-2026-0459 для `libsqlite3-sys`: он приходит из optional-зависимости SQLite в sqlx, которая не включена; Pingushka использует только PostgreSQL.
 
 ## Конфигурация
@@ -160,6 +178,9 @@ Hub читает переменные окружения:
 | `PRUNE_INTERVAL_MINUTES` | `60` | Интервал фоновой очистки. |
 | `STATIC_DIR` | — | Каталог собранного SPA. В образе — `/app/static`. |
 | `INSTALL_SCRIPT_URL` | GitHub raw URL | Ссылка на установщик в командах агента. |
+| `ALERT_SECRET_KEY` | — | 32-байтный ключ в hex или base64 для шифрования секретов каналов. Обязателен. Менять нельзя: сохранённые секреты станут нечитаемыми. |
+| `ALERT_EVALUATE_INTERVAL_SECS` | `30` | Как часто проверяются правила оповещений. |
+| `TELEGRAM_API_BASE` | `https://api.telegram.org` | База Telegram Bot API; переопределяется только для локального mock. |
 
 Docker Compose также читает `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DOMAIN` и `PINGUSHKA_VERSION`.
 
@@ -188,8 +209,8 @@ Vite отдаёт <http://127.0.0.1:5173> и проксирует `/api` на `1
 
 ## Релизы и образы
 
-- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.1.3` (также `0.1`, `latest`, `main`, `sha-*`), multi-arch.
-- Образ агента: `ghcr.io/vasilchenkome/pingushka-agent:0.1.3`, multi-arch, для контейнерных проб.
+- Образ Hub: `ghcr.io/vasilchenkome/pingushka-hub:0.2.0` (также `0.2`, `latest`, `main`, `sha-*`), multi-arch.
+- Образ агента: `ghcr.io/vasilchenkome/pingushka-agent:0.2.0`, multi-arch, для контейнерных проб.
 - Релизные бинари: <https://github.com/vasilchenkome/pingushka/releases>.
 - Workflow `Image` публикует образы при пуше в `main` и по тегам `v*`.
 - Workflow `Release` собирает Hub и агентов с `SHA256SUMS` для `install.sh`.
@@ -197,12 +218,12 @@ Vite отдаёт <http://127.0.0.1:5173> и проксирует `/api` на `1
 ## Ограничения и планы
 
 - Агенты только для Linux x86_64 и ARM64.
-- Оповещений пока нет: дашборд показывает состояние и историю, но не отправляет уведомления.
+- Каналы оповещений: Telegram, произвольный webhook и SMTP-письма; SMS, PagerDuty и Opsgenie не встроены.
 - Автообновление перезапускает только `pingushka-agent.service`; дополнительные службы агента на том же хосте нужно перезапускать вручную.
 - Один администратор, без ролей и SSO.
 - Интерфейс дашборда только на русском.
 
-Дальше по плану: уведомления в Telegram и webhook с порогом сбоев и сообщением о восстановлении.
+Дальше по плану: новые интеграции каналов и рекомендации по high availability.
 
 ## Лицензия
 

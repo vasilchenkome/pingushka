@@ -9,6 +9,7 @@ axum = { version = "0.8", features = ["ws"] }
 pingushka-application = { path = "../application" }
 pingushka-hub-http = { path = "../hub-http" }
 pingushka-storage-postgres = { path = "../storage-postgres" }
+time.workspace = true
 tokio = { workspace = true, features = ["net", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
