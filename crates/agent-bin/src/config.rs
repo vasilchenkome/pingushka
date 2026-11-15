@@ -105,13 +105,13 @@ impl AgentConfig {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = fs::metadata(path) {
-                if metadata.permissions().mode() & 0o077 != 0 {
-                    tracing::warn!(
-                        path = %path.display(),
-                        "configuration file is readable by other users; expected mode 0600"
-                    );
-                }
+            if let Ok(metadata) = fs::metadata(path)
+                && metadata.permissions().mode() & 0o077 != 0
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    "configuration file is readable by other users; expected mode 0600"
+                );
             }
         }
         let config: Self =
