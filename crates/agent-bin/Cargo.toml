@@ -14,7 +14,7 @@ serde_json.workspace = true
 surge-ping.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "net", "signal", "sync", "time"] }
-tokio-tungstenite = "0.30"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 toml.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
