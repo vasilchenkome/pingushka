@@ -4,7 +4,7 @@ Pingushka is an open-source distributed monitoring system built around a central
 
 The planned MVP includes HTTP(S), TCP-port and ICMP checks; a PostgreSQL-backed history; an authenticated web dashboard; one-time enrollment commands for individual agents; and a Docker Compose deployment with automatic HTTPS through Caddy.
 
-**Status: early development.** The workspace, domain model, PostgreSQL schema/repositories, batch persistence, and cryptographic adapters are in place. The Hub exposes its authenticated REST API (first-run setup, sessions, agents with one-time enrollment, targets, history and summary), accepts agent results over WebSocket with acknowledgements, and prunes expired data. The Linux agent is implemented: scheduling with explicit timeouts, HTTP/TCP/ICMP probes with an explicit `tcp_fallback`, a bounded on-disk result buffer, batched delivery with acknowledgements, reconnect backoff with jitter and graceful shutdown. `install.sh` installs the agent and a systemd service. The dashboard and the application Docker image are not yet implemented or released.
+**Status: early development.** The workspace, domain model, PostgreSQL schema/repositories, batch persistence, and cryptographic adapters are in place. The Hub exposes its authenticated REST API (first-run setup, sessions, agents with one-time enrollment, targets, history and summary), accepts agent results over WebSocket with acknowledgements, and prunes expired data. The Linux agent is implemented: scheduling with explicit timeouts, HTTP/TCP/ICMP probes with an explicit `tcp_fallback`, a bounded on-disk result buffer, batched delivery with acknowledgements, reconnect backoff with jitter and graceful shutdown. `install.sh` installs the agent and a systemd service. The dashboard SPA lives in `frontend/` and talks to the Hub API; serving it from the Hub binary and the application Docker image are not yet implemented or released.
 
 ## Supported agent platforms
 
@@ -44,6 +44,16 @@ Requirements: stable Rust toolchain and Docker Desktop with Docker Compose.
    cargo test --workspace
    cargo clippy --workspace --all-targets --all-features -- -D warnings
    ```
+
+4. Run the SPA against the local Hub (Node 22 or newer):
+
+   ```sh
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+   Vite serves `http://127.0.0.1:5173` and proxies `/api` to `127.0.0.1:8080`, so start the Hub first. `npm run build` writes the production bundle to `frontend/dist`.
 
 The local database port is bound to `127.0.0.1` only. Keep `.env` private; it is ignored by Git. `docker compose down -v` removes the local database volume and all its data.
 

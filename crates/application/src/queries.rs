@@ -16,7 +16,7 @@ impl fmt::Display for QueryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             Self::InvalidTimeRange => "query start must be before query end",
-            Self::InvalidLimit => "history limit must be between 1 and 1000",
+            Self::InvalidLimit => "history limit must be between 1 and 5000",
         };
         formatter.write_str(message)
     }
@@ -44,7 +44,7 @@ impl HistoryFilter {
         if from >= to {
             return Err(QueryError::InvalidTimeRange);
         }
-        if !(1..=1000).contains(&limit) {
+        if !(1..=5000).contains(&limit) {
             return Err(QueryError::InvalidLimit);
         }
         Ok(Self {

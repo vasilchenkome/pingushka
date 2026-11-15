@@ -21,9 +21,9 @@ fn history_filter_requires_a_valid_range_and_bounded_limit() {
         HistoryFilter::new(TargetId::new(), None, from, to, 0).unwrap_err(),
         QueryError::InvalidLimit
     );
-    assert!(HistoryFilter::new(TargetId::new(), Some(AgentId::new()), from, to, 1000,).is_ok());
+    assert!(HistoryFilter::new(TargetId::new(), Some(AgentId::new()), from, to, 5000,).is_ok());
     assert_eq!(
-        HistoryFilter::new(TargetId::new(), None, from, to, 1001).unwrap_err(),
+        HistoryFilter::new(TargetId::new(), None, from, to, 5001).unwrap_err(),
         QueryError::InvalidLimit
     );
 }
