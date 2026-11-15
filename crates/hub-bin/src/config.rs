@@ -12,6 +12,9 @@ pub struct Config {
     pub retention: Duration,
     pub manual_check_cooldown: Duration,
     pub prune_interval: Duration,
+    pub alert_evaluate_interval: Duration,
+    pub alert_secret_key: String,
+    pub telegram_api_base: String,
     pub static_dir: Option<std::path::PathBuf>,
 }
 
@@ -60,6 +63,14 @@ impl Config {
                 10,
             )?),
             prune_interval: minutes(parse_env("PRUNE_INTERVAL_MINUTES", 60)?),
+            alert_evaluate_interval: Duration::from_secs(parse_env(
+                "ALERT_EVALUATE_INTERVAL_SECS",
+                30,
+            )?),
+            alert_secret_key: env::var("ALERT_SECRET_KEY")
+                .map_err(|_| ConfigError::Missing("ALERT_SECRET_KEY"))?,
+            telegram_api_base: env::var("TELEGRAM_API_BASE")
+                .unwrap_or_else(|_| "https://api.telegram.org".to_owned()),
             static_dir: env::var("STATIC_DIR")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
