@@ -18,7 +18,7 @@ license = "MIT"
 [workspace.dependencies]
 async-trait = "0.1"
 argon2 = { version = "0.6", features = ["getrandom", "password-hash", "zeroize"] }
-base64 = "0.22"
+base64 = "0.23"
 chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
 hmac = "0.13"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "ring"] }
